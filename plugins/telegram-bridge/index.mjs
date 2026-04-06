@@ -298,6 +298,82 @@ function stripActionMarkers(text) {
     return String(text ?? '').trim().replace(/^\*([\s\S]*)\*$/u, '$1').trim();
 }
 
+function findNextQuoteStart(text, startIndex = 0) {
+    const quotePairs = [
+        ['“', '”'],
+        ['"', '"'],
+        ['「', '」'],
+        ['『', '』'],
+    ];
+
+    let bestMatch = null;
+
+    for (const [open, close] of quotePairs) {
+        const index = text.indexOf(open, startIndex);
+        if (index === -1) {
+            continue;
+        }
+
+        if (!bestMatch || index < bestMatch.index) {
+            bestMatch = { index, open, close };
+        }
+    }
+
+    return bestMatch;
+}
+
+function splitMixedDialogueParagraph(text) {
+    const source = String(text ?? '');
+    const segments = [];
+    let cursor = 0;
+
+    while (cursor < source.length) {
+        const nextQuote = findNextQuoteStart(source, cursor);
+        if (!nextQuote) {
+            const trailing = source.slice(cursor).trim();
+            if (trailing) {
+                segments.push({
+                    type: 'thought',
+                    text: trailing,
+                });
+            }
+            break;
+        }
+
+        const leading = source.slice(cursor, nextQuote.index).trim();
+        if (leading) {
+            segments.push({
+                type: 'thought',
+                text: leading,
+            });
+        }
+
+        const closeIndex = source.indexOf(nextQuote.close, nextQuote.index + nextQuote.open.length);
+        if (closeIndex === -1) {
+            const trailing = source.slice(nextQuote.index).trim();
+            if (trailing) {
+                segments.push({
+                    type: 'thought',
+                    text: trailing,
+                });
+            }
+            break;
+        }
+
+        const dialogue = source.slice(nextQuote.index, closeIndex + nextQuote.close.length).trim();
+        if (dialogue) {
+            segments.push({
+                type: 'dialogue',
+                text: dialogue,
+            });
+        }
+
+        cursor = closeIndex + nextQuote.close.length;
+    }
+
+    return segments;
+}
+
 function formatTelegramInlineText(text) {
     const placeholders = [];
     let working = String(text ?? '').replace(/\r\n/g, '\n');
@@ -331,27 +407,41 @@ function formatTelegramInlineText(text) {
 function formatTelegramText(text) {
     const normalized = String(text ?? '').replace(/\r\n/g, '\n');
     const paragraphs = normalized.split(/\n{2,}/u);
-    const rendered = paragraphs.map(paragraph => {
+    const rendered = paragraphs.flatMap(paragraph => {
         const rawParagraph = String(paragraph ?? '');
         const trimmed = rawParagraph.trim();
 
         if (!trimmed) {
-            return '';
+            return [];
         }
 
         if (isActionParagraph(trimmed)) {
             const actionText = stripActionMarkers(trimmed);
             const inlineActionHtml = formatTelegramInlineText(actionText);
-            return `<i>${inlineActionHtml}</i>`;
+            return [`<i>${inlineActionHtml}</i>`];
+        }
+
+        const mixedSegments = splitMixedDialogueParagraph(rawParagraph);
+        const hasDialogueSegment = mixedSegments.some(segment => segment.type === 'dialogue');
+        const hasThoughtSegment = mixedSegments.some(segment => segment.type === 'thought');
+        if (hasDialogueSegment && hasThoughtSegment) {
+            return mixedSegments.map(segment => {
+                const inlineHtml = formatTelegramInlineText(segment.text);
+                if (segment.type === 'dialogue') {
+                    return `<blockquote>${inlineHtml}</blockquote>`;
+                }
+
+                return `<i>${inlineHtml}</i>`;
+            });
         }
 
         const inlineHtml = formatTelegramInlineText(rawParagraph);
         if (isDialogueParagraph(trimmed)) {
-            return `<blockquote>${inlineHtml}</blockquote>`;
+            return [`<blockquote>${inlineHtml}</blockquote>`];
         }
 
-        return inlineHtml;
-    });
+        return [inlineHtml];
+    }).filter(Boolean);
 
     return rendered.join('\n\n');
 }
