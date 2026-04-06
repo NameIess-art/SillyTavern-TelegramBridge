@@ -12,6 +12,8 @@ import { trimTrailingSlash } from '../../src/util.js';
 
 const PLUGIN_ID = 'telegram-bridge';
 const TELEGRAM_API = 'https://api.telegram.org';
+const STREAM_EDIT_INTERVAL_MS = 900;
+const STREAM_MIN_DELTA_CHARS = 24;
 const DEFAULT_CONFIG = Object.freeze({
     enabled: false,
     botToken: '',
@@ -249,6 +251,53 @@ function splitTelegramMessage(text, limit = 4000) {
     }
 
     return chunks.length > 0 ? chunks : [''];
+}
+
+function extractTextParts(value) {
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value
+            .map(part => {
+                if (typeof part === 'string') {
+                    return part;
+                }
+
+                if (typeof part?.text === 'string') {
+                    return part.text;
+                }
+
+                if (typeof part?.content === 'string') {
+                    return part.content;
+                }
+
+                return '';
+            })
+            .join('');
+    }
+
+    return '';
+}
+
+function extractTextFromStreamEvent(data) {
+    const choice = data?.choices?.[0];
+
+    if (!choice || typeof choice !== 'object') {
+        return '';
+    }
+
+    const delta = choice.delta ?? {};
+
+    return (
+        extractTextParts(delta.content)
+        || extractTextParts(delta.text)
+        || extractTextParts(choice.text)
+        || extractTextParts(choice.message?.content)
+        || extractTextParts(data?.content?.[0]?.text)
+        || ''
+    );
 }
 
 function extractTextFromResponse(data) {
@@ -607,15 +656,49 @@ class TelegramBridgeManager {
 
         await this.sendChatAction(config.botToken, chatId, 'typing');
 
+        const initialReply = `${config.replyPrefix}...`;
+        const [initialMessage] = await this.sendTelegramMessage(config.botToken, chatId, initialReply);
+        const streamState = this.createTelegramStreamState({
+            message_id: initialMessage.message_id,
+            text: initialReply,
+        });
+
         try {
-            const reply = await this.generateReply(config, state, chatId, text);
-            await this.sendTelegramMessage(config.botToken, chatId, `${config.replyPrefix}${reply}`);
+            const reply = await this.generateReply(
+                config,
+                state,
+                chatId,
+                text,
+                async (partialReply) => {
+                    await this.renderTelegramStream(
+                        config.botToken,
+                        chatId,
+                        streamState,
+                        `${config.replyPrefix}${partialReply}`,
+                    );
+                },
+            );
+
+            await this.renderTelegramStream(
+                config.botToken,
+                chatId,
+                streamState,
+                `${config.replyPrefix}${reply}`,
+                true,
+            );
+
             this.lastError = '';
         } catch (error) {
             if (!this.lastError || this.lastError === 'Upstream returned no assistant text.') {
                 this.lastError = error.message;
             }
-            await this.sendTelegramMessage(config.botToken, chatId, `Bridge error: ${error.message}`);
+            await this.renderTelegramStream(
+                config.botToken,
+                chatId,
+                streamState,
+                `Bridge error: ${error.message}`,
+                true,
+            );
         }
     }
 
@@ -999,7 +1082,7 @@ class TelegramBridgeManager {
         state.conversations[chatId] = history.slice(-Math.max(2, historyLimit) * 2);
     }
 
-    async generateReply(config, state, chatId, input) {
+    async generateReply(config, state, chatId, input, onProgress = async () => { }) {
         const runtime = this.resolveRuntime(config);
         const endpoint = `${trimTrailingSlash(runtime.baseUrl)}/chat/completions`;
         const body = this.buildRequestBody(runtime, config, state, chatId, input);
@@ -1012,6 +1095,8 @@ class TelegramBridgeManager {
             headers.Authorization = `Bearer ${runtime.apiKey}`;
         }
 
+        body.stream = true;
+
         const response = await this.fetchWithTimeout(
             endpoint,
             {
@@ -1022,24 +1107,24 @@ class TelegramBridgeManager {
             config.requestTimeoutMs,
         );
 
-        const rawText = await response.text();
-        let parsed = {};
-
-        if (rawText) {
-            try {
-                parsed = JSON.parse(rawText);
-            } catch {
-                parsed = {};
-            }
-        }
-
         if (!response.ok) {
+            const rawText = await response.text();
+            let parsed = {};
+
+            if (rawText) {
+                try {
+                    parsed = JSON.parse(rawText);
+                } catch {
+                    parsed = {};
+                }
+            }
+
             throw new Error(extractErrorMessage(response.status, rawText, parsed));
         }
 
-        const assistantReply = extractTextFromResponse(parsed);
+        const assistantReply = await this.collectStreamedReply(response, onProgress);
         if (!assistantReply) {
-            this.lastError = `Upstream returned no assistant text. Raw response preview: ${rawText.slice(0, 1200)}`;
+            this.lastError = 'Upstream returned no assistant text from the streaming response.';
             throw new Error('Upstream returned no assistant text.');
         }
 
@@ -1050,6 +1135,109 @@ class TelegramBridgeManager {
         }
 
         return assistantReply;
+    }
+
+    async collectStreamedReply(response, onProgress) {
+        if (!response.body || typeof response.body.getReader !== 'function') {
+            const rawText = await response.text();
+            let parsed = {};
+
+            if (rawText) {
+                try {
+                    parsed = JSON.parse(rawText);
+                } catch {
+                    parsed = {};
+                }
+            }
+
+            return extractTextFromResponse(parsed);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let assistantReply = '';
+        let lastProgressText = '';
+
+        const flushEventBlock = async (eventBlock) => {
+            const dataLines = eventBlock
+                .split(/\r?\n/u)
+                .filter(line => line.startsWith('data:'))
+                .map(line => line.slice(5).trimStart());
+
+            if (dataLines.length === 0) {
+                return false;
+            }
+
+            const payload = dataLines.join('\n').trim();
+            if (!payload) {
+                return false;
+            }
+
+            if (payload === '[DONE]') {
+                return true;
+            }
+
+            let parsed = {};
+            try {
+                parsed = JSON.parse(payload);
+            } catch {
+                return false;
+            }
+
+            const deltaText = extractTextFromStreamEvent(parsed);
+            if (deltaText) {
+                assistantReply += deltaText;
+                if (assistantReply !== lastProgressText) {
+                    await onProgress(assistantReply);
+                    lastProgressText = assistantReply;
+                }
+            }
+
+            return parsed?.choices?.[0]?.finish_reason != null;
+        };
+
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+
+                if (done) {
+                    buffer += decoder.decode();
+                    break;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+
+                let boundaryIndex = buffer.search(/\r?\n\r?\n/u);
+                while (boundaryIndex !== -1) {
+                    const eventBlock = buffer.slice(0, boundaryIndex);
+                    const separatorLength = buffer.startsWith('\r\n\r\n', boundaryIndex) ? 4 : 2;
+                    buffer = buffer.slice(boundaryIndex + separatorLength);
+
+                    const shouldStop = await flushEventBlock(eventBlock);
+                    if (shouldStop) {
+                        if (assistantReply && assistantReply !== lastProgressText) {
+                            await onProgress(assistantReply);
+                        }
+                        return assistantReply.trim();
+                    }
+
+                    boundaryIndex = buffer.search(/\r?\n\r?\n/u);
+                }
+            }
+
+            if (buffer.trim()) {
+                await flushEventBlock(buffer);
+            }
+        } finally {
+            reader.releaseLock();
+        }
+
+        if (assistantReply) {
+            await onProgress(assistantReply);
+        }
+
+        return assistantReply.trim();
     }
 
     telegramUrl(botToken, method) {
@@ -1075,6 +1263,7 @@ class TelegramBridgeManager {
 
     async sendTelegramMessage(botToken, chatId, text) {
         const chunks = splitTelegramMessage(text);
+        const messages = [];
         for (const chunk of chunks) {
             const response = await this.fetchWithTimeout(
                 this.telegramUrl(botToken, 'sendMessage'),
@@ -1095,7 +1284,86 @@ class TelegramBridgeManager {
             if (!response.ok || payload?.ok !== true) {
                 throw new Error(`Telegram sendMessage failed: ${extractErrorMessage(response.status, JSON.stringify(payload), payload)}`);
             }
+
+            messages.push(payload.result);
         }
+
+        return messages;
+    }
+
+    async editTelegramMessage(botToken, chatId, messageId, text) {
+        const response = await this.fetchWithTimeout(
+            this.telegramUrl(botToken, 'editMessageText'),
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    message_id: messageId,
+                    text,
+                }),
+            },
+            30000,
+        );
+
+        const payload = await response.json();
+        if (!response.ok || payload?.ok !== true) {
+            throw new Error(`Telegram editMessageText failed: ${extractErrorMessage(response.status, JSON.stringify(payload), payload)}`);
+        }
+
+        return payload.result;
+    }
+
+    createTelegramStreamState(initialMessage) {
+        return {
+            messageIds: [initialMessage.message_id],
+            chunkTexts: [String(initialMessage.text ?? '')],
+            lastRenderedText: String(initialMessage.text ?? ''),
+            lastFlushAt: 0,
+        };
+    }
+
+    shouldFlushTelegramStream(state, fullText, force) {
+        if (force) {
+            return true;
+        }
+
+        if (!fullText || fullText === state.lastRenderedText) {
+            return false;
+        }
+
+        const now = Date.now();
+        const deltaChars = Math.abs(fullText.length - state.lastRenderedText.length);
+        return deltaChars >= STREAM_MIN_DELTA_CHARS || (now - state.lastFlushAt) >= STREAM_EDIT_INTERVAL_MS;
+    }
+
+    async renderTelegramStream(botToken, chatId, streamState, fullText, force = false) {
+        if (!this.shouldFlushTelegramStream(streamState, fullText, force)) {
+            return;
+        }
+
+        const chunks = splitTelegramMessage(fullText);
+
+        for (let index = 0; index < chunks.length; index++) {
+            const chunk = chunks[index];
+
+            if (index < streamState.messageIds.length) {
+                if (streamState.chunkTexts[index] !== chunk) {
+                    await this.editTelegramMessage(botToken, chatId, streamState.messageIds[index], chunk);
+                    streamState.chunkTexts[index] = chunk;
+                }
+                continue;
+            }
+
+            const [message] = await this.sendTelegramMessage(botToken, chatId, chunk);
+            streamState.messageIds.push(message.message_id);
+            streamState.chunkTexts.push(chunk);
+        }
+
+        streamState.lastRenderedText = fullText;
+        streamState.lastFlushAt = Date.now();
     }
 
     async fetchWithTimeout(url, options, timeoutMs) {

@@ -2,6 +2,10 @@
 
 All notable changes to this project should be documented in this file.
 
+## Unreleased
+
+- Added Telegram pseudo-streaming output by progressively editing bot messages during upstream streaming responses
+
 ## 0.1.0 - 2026-04-06
 
 - Initial public package layout for the SillyTavern Telegram Bridge
