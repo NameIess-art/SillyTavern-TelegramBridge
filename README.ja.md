@@ -2,17 +2,18 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md) | [日本語](./README.ja.md)
 
-SillyTavern 向けの Telegram Bridge を、配布しやすい形で次の 2 つに分けて同梱しています。
+SillyTavern 向けの Telegram Bridge 配布パッケージです。構成は次の 2 つです。
 
-- `plugins/telegram-bridge` に配置するサーバープラグイン
-- `extensions/telegram-bridge` に配置するフロントエンド拡張
+- `plugins/telegram-bridge` のサーバープラグイン
+- `extensions/telegram-bridge` のフロントエンド拡張
 
 このブリッジでできること：
 
-- Telegram Bot を SillyTavern に接続する
-- フロントエンドから連携する SillyTavern のチャットを選ぶ
-- フロントエンドから `botToken` と Telegram の `Chat ID` を設定する
-- Telegram の会話を、選択した SillyTavern チャットの文脈で継続させる
+- 1 つの Telegram Bot を SillyTavern に接続する
+- フロントエンドから `botToken` と 1 つの認可済み Telegram `Chat ID` を設定する
+- 現在リンクする SillyTavern チャットを選ぶ
+- 後から Telegram 上で `/chats` と `/bind <number>` を使ってリンク先チャットを切り替える
+- Telegram の会話を選択中の SillyTavern チャット文脈に流し込む
 
 ## 同梱内容
 
@@ -21,7 +22,7 @@ SillyTavern 向けの Telegram Bridge を、配布しやすい形で次の 2 つ
 - `extensions/telegram-bridge`
   SillyTavern の拡張パネルに表示されるフロントエンド拡張です。
 - `install.ps1`
-  既存の SillyTavern に両方をコピーするための Windows 用インストーラスクリプトです。
+  既存の SillyTavern 環境へ両方をコピーする Windows 用インストールスクリプトです。
 
 ## 動作要件
 
@@ -46,7 +47,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -SillyTavernRoot "E:\Path
 
 ### 手動インストール
 
-1. `plugins/telegram-bridge` を SillyTavern の `plugins` フォルダへコピーします。
+1. `plugins/telegram-bridge` を SillyTavern の `plugins` フォルダーへコピーします。
 2. `extensions/telegram-bridge` を `data/<your-user-handle>/extensions/telegram-bridge` へコピーします。
 3. SillyTavern の `config.yaml` を開き、次を有効にします。
 
@@ -63,15 +64,36 @@ enableServerPlugins: true
 
 1. ブリッジを有効化する
 2. Telegram の `botToken` を入力する
-3. 1 つ以上の Telegram `Chat ID` を入力する
-4. 連携したい SillyTavern チャットを選択する
+3. 自分の Telegram `Chat ID` を入力する
+4. 既定でリンクする SillyTavern チャットを選ぶ
 5. 保存する
 
-Telegram Chat ID の取得方法：
+Telegram Chat ID の確認方法：
 
 1. Bot に `/start` を送る
 2. Bot に `/whoami` を送る
-3. 返ってきたメッセージの `Chat ID` をコピーする
+3. 返信に表示された `Chat ID` を控える
+
+## Telegram コマンド
+
+Bot は次のコマンドに対応しています。
+
+- `/help`
+- `/whoami`
+- `/status`
+- `/currentchat`
+- `/chats`
+- `/bind <number>`
+- `/unbind`
+- `/reset`
+
+おすすめの流れ：
+
+1. `/chats` を送る
+2. 使いたい SillyTavern チャットの番号を確認する
+3. `/bind <number>` を送る
+
+これでフロントエンド設定画面に戻らなくても、Telegram 上で現在のリンク先チャットを切り替えられます。
 
 ## プロジェクト構成
 
@@ -98,7 +120,7 @@ SillyTavern-TelegramBridge/
 
 ## API ルート
 
-サーバープラグインは次の配下にルートを公開します。
+サーバープラグインは次の配下にエンドポイントを公開します。
 
 `/api/plugins/telegram-bridge`
 
@@ -117,26 +139,26 @@ SillyTavern-TelegramBridge/
 
 - フロントエンドファイルが `data/<user>/extensions/telegram-bridge` にコピーされているか確認してください
 - 拡張マネージャーで無効化されていないか確認してください
-- インストール後にブラウザを再読み込みしてください
+- インストール後にブラウザを更新してください
 
 ### プラグイン API ルートが存在しない
 
-- `plugins/telegram-bridge` が SillyTavern のルートに入っているか確認してください
-- `config.yaml` に `enableServerPlugins: true` が設定されているか確認してください
-- プラグイン導入後に SillyTavern を再起動してください
+- `plugins/telegram-bridge` が SillyTavern のルートに配置されているか確認してください
+- `config.yaml` で `enableServerPlugins: true` が有効か確認してください
+- インストール後に SillyTavern を再起動してください
 
 ### Telegram で bridge error が返る
 
 - bot token が有効か確認してください
-- Telegram chat ID が許可されているか確認してください
+- Telegram Chat ID が認可されているか確認してください
 - SillyTavern の上流モデル接続が正常か確認してください
 - `/api/plugins/telegram-bridge/status` の `lastError` を確認してください
 
 ## 開発メモ
 
-- サーバープラグインは SillyTavern の server plugin loader 向けに作られています。
-- フロントエンド拡張は SillyTavern のユーザー別またはグローバル third-party extension 方式に対応しています。
-- 現時点ではこのリポジトリに明示的なオープンソースライセンスはありません。広く再配布したい場合は、ライセンス追加を推奨します。
+- サーバープラグインは SillyTavern の server plugin loader 向けです。
+- フロントエンド拡張は SillyTavern のユーザー単位またはグローバル third-party extension 方式に対応しています。
+- 現時点では明示的なオープンソースライセンスはありません。広く再配布する場合は LICENSE の追加を推奨します。
 
 ## コントリビュート
 

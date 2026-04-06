@@ -9,11 +9,11 @@ Telegram Bridge for SillyTavern, packaged for distribution as:
 
 This bridge lets you:
 
-- connect a Telegram bot to SillyTavern
-- choose which SillyTavern chat is linked from the front end
-- configure `botToken` and Telegram `Chat ID` from the front end
-- map different Telegram chats to different SillyTavern chats with one bot
-- keep Telegram conversations routed through a selected SillyTavern chat context
+- connect one Telegram bot to SillyTavern
+- configure `botToken` and a single authorized Telegram `Chat ID` from the front end
+- choose which SillyTavern chat is currently linked
+- switch the linked SillyTavern chat later from Telegram with `/chats` and `/bind <number>`
+- keep Telegram conversations routed through the selected SillyTavern chat context
 
 ## What Is Included
 
@@ -64,10 +64,9 @@ After installation, open the `Telegram Bridge` settings drawer in SillyTavern an
 
 1. enable the bridge
 2. paste your Telegram `botToken`
-3. enter one or more Telegram `Chat ID` values
-4. choose a default SillyTavern chat
-5. optionally add per-chat mappings for specific Telegram `Chat ID` values
-6. save
+3. enter your Telegram `Chat ID`
+4. choose the SillyTavern chat to link by default
+5. save
 
 To discover your Telegram chat ID:
 
@@ -77,7 +76,7 @@ To discover your Telegram chat ID:
 
 ## Telegram Commands
 
-The bot also supports chat management commands directly inside Telegram:
+The bot supports these commands directly inside Telegram:
 
 - `/help`
 - `/whoami`
@@ -94,7 +93,7 @@ Recommended flow:
 2. note the number of the SillyTavern chat you want
 3. send `/bind <number>`
 
-That will bind the current Telegram chat to the selected SillyTavern chat without opening the front-end settings page.
+That switches the currently linked SillyTavern chat without opening the front-end settings page.
 
 ## Project Layout
 
@@ -114,7 +113,9 @@ SillyTavern-TelegramBridge/
 |- install.ps1
 |- CHANGELOG.md
 |- CONTRIBUTING.md
-\- README.md
+|- README.md
+|- README.zh-CN.md
+\- README.ja.md
 ```
 
 ## API Routes

@@ -18,7 +18,7 @@ const DEFAULT_CONFIG = Object.freeze({
     enabled: false,
     botToken: '',
     allowAllChats: false,
-    authorizedChatIds: [],
+    authorizedChatId: '',
     userHandle: DEFAULT_USER.handle,
     historyLimit: 12,
     requestTimeoutMs: 120000,
@@ -30,7 +30,6 @@ const DEFAULT_CONFIG = Object.freeze({
         apiKey: '',
         model: '',
     },
-    chatMappings: {},
     selectedChat: {
         avatarUrl: '',
         chatFile: '',
@@ -168,12 +167,8 @@ function isMaskedSecret(value) {
     return typeof value === 'string' && value.includes('...');
 }
 
-function normalizeChatIds(chatIds) {
-    if (!Array.isArray(chatIds)) {
-        return [];
-    }
-
-    return [...new Set(chatIds.map(id => String(id).trim()).filter(Boolean))];
+function normalizeChatId(chatId) {
+    return String(chatId ?? '').trim();
 }
 
 function normalizeSelectedChat(selectedChat = {}) {
@@ -183,28 +178,29 @@ function normalizeSelectedChat(selectedChat = {}) {
     };
 }
 
-function normalizeChatMappings(chatMappings) {
-    if (!chatMappings || typeof chatMappings !== 'object' || Array.isArray(chatMappings)) {
-        return {};
-    }
-
-    return Object.fromEntries(
-        Object.entries(chatMappings)
-            .map(([chatId, selectedChat]) => [String(chatId).trim(), normalizeSelectedChat(selectedChat)])
-            .filter(([chatId, selectedChat]) => chatId && selectedChat.avatarUrl && selectedChat.chatFile),
-    );
-}
-
 function normalizeConfig(rawConfig = {}) {
     const providerOverride = typeof rawConfig.providerOverride === 'object' && rawConfig.providerOverride !== null
         ? rawConfig.providerOverride
         : {};
+    const fallbackAuthorizedChatId = Array.isArray(rawConfig.authorizedChatIds)
+        ? String(rawConfig.authorizedChatIds[0] ?? '').trim()
+        : '';
+    const authorizedChatId = normalizeChatId(rawConfig.authorizedChatId || fallbackAuthorizedChatId);
+    const fallbackMappedChat = authorizedChatId
+        && rawConfig.chatMappings
+        && typeof rawConfig.chatMappings === 'object'
+        && !Array.isArray(rawConfig.chatMappings)
+        ? rawConfig.chatMappings[authorizedChatId]
+        : null;
+    const selectedChat = normalizeSelectedChat(rawConfig.selectedChat?.avatarUrl || rawConfig.selectedChat?.chatFile
+        ? rawConfig.selectedChat
+        : fallbackMappedChat);
 
     return {
         enabled: Boolean(rawConfig.enabled),
         botToken: String(rawConfig.botToken ?? '').trim(),
         allowAllChats: Boolean(rawConfig.allowAllChats),
-        authorizedChatIds: normalizeChatIds(rawConfig.authorizedChatIds),
+        authorizedChatId,
         userHandle: String(rawConfig.userHandle ?? DEFAULT_CONFIG.userHandle).trim() || DEFAULT_CONFIG.userHandle,
         historyLimit: Math.max(2, toInteger(rawConfig.historyLimit, DEFAULT_CONFIG.historyLimit)),
         requestTimeoutMs: Math.max(10000, toInteger(rawConfig.requestTimeoutMs, DEFAULT_CONFIG.requestTimeoutMs)),
@@ -216,8 +212,7 @@ function normalizeConfig(rawConfig = {}) {
             apiKey: String(providerOverride.apiKey ?? '').trim(),
             model: String(providerOverride.model ?? '').trim(),
         },
-        chatMappings: normalizeChatMappings(rawConfig.chatMappings),
-        selectedChat: normalizeSelectedChat(rawConfig.selectedChat),
+        selectedChat,
     };
 }
 
@@ -591,7 +586,6 @@ class TelegramBridgeManager {
             const config = this.readConfig();
             response.send({
                 selectedChat: config.selectedChat,
-                chatMappings: config.chatMappings,
                 chats: this.listAvailableChats(config.userHandle),
             });
         });
@@ -617,14 +611,6 @@ class TelegramBridgeManager {
 
             if (next.selectedChat?.avatarUrl || next.selectedChat?.chatFile) {
                 this.resolveSelectedChat(next.userHandle, next.selectedChat, true);
-            }
-
-            for (const [mappedChatId, mappedSelectedChat] of Object.entries(next.chatMappings ?? {})) {
-                if (!mappedChatId) {
-                    continue;
-                }
-
-                this.resolveSelectedChat(next.userHandle, mappedSelectedChat, true);
             }
 
             this.writeConfig(next);
@@ -859,7 +845,7 @@ class TelegramBridgeManager {
             let statusText;
             try {
                 const runtime = this.resolveRuntime(config);
-                const currentChatLabel = this.getSelectedChatLabel(config, chatId);
+                const currentChatLabel = this.getSelectedChatLabel(config);
                 statusText = [
                     `Running: ${this.running ? 'yes' : 'no'}`,
                     `Authorized: ${this.isAuthorized(config, chatId) ? 'yes' : 'no'}`,
@@ -877,14 +863,12 @@ class TelegramBridgeManager {
         }
 
         if (command === '/currentchat') {
-            const currentChatLabel = this.getSelectedChatLabel(config, chatId);
-            const mappedDirectly = Boolean(config.chatMappings?.[String(chatId)]);
+            const currentChatLabel = this.getSelectedChatLabel(config);
             await this.sendTelegramMessage(
                 config.botToken,
                 chatId,
                 [
                     `Linked chat: ${currentChatLabel}`,
-                    `Mapping mode: ${mappedDirectly ? 'custom mapping' : 'default chat'}`,
                     `Telegram Chat ID: ${chatId}`,
                 ].join('\n'),
             );
@@ -903,7 +887,7 @@ class TelegramBridgeManager {
                 lines.push(`${index + 1}. ${chat.characterName} | ${chat.chatFile}`);
             });
             lines.push('');
-            lines.push('Use /bind <number> to bind this Telegram chat to one of the entries above.');
+            lines.push('Use /bind <number> to switch the linked SillyTavern chat.');
 
             await this.sendTelegramMessage(config.botToken, chatId, lines.join('\n'));
             return;
@@ -925,9 +909,29 @@ class TelegramBridgeManager {
             const selectedChat = normalizeSelectedChat(availableChats[chatNumber - 1]);
             const nextConfig = normalizeConfig({
                 ...config,
-                chatMappings: {
-                    ...(config.chatMappings ?? {}),
-                    [String(chatId)]: selectedChat,
+                selectedChat,
+            });
+
+            this.writeConfig(nextConfig);
+            Object.assign(config, nextConfig);
+
+            await this.sendTelegramMessage(
+                config.botToken,
+                chatId,
+                [
+                    'Linked SillyTavern chat updated.',
+                    `Linked chat: ${this.getSelectedChatLabel(config)}`,
+                ].join('\n'),
+            );
+            return;
+        }
+
+        if (command === '/unbind') {
+            const nextConfig = normalizeConfig({
+                ...config,
+                selectedChat: {
+                    avatarUrl: '',
+                    chatFile: '',
                 },
             });
 
@@ -938,32 +942,8 @@ class TelegramBridgeManager {
                 config.botToken,
                 chatId,
                 [
-                    'Telegram chat binding updated.',
-                    `Telegram Chat ID: ${chatId}`,
-                    `Linked chat: ${this.getSelectedChatLabel(config, chatId)}`,
-                ].join('\n'),
-            );
-            return;
-        }
-
-        if (command === '/unbind') {
-            const nextMappings = { ...(config.chatMappings ?? {}) };
-            delete nextMappings[String(chatId)];
-
-            const nextConfig = normalizeConfig({
-                ...config,
-                chatMappings: nextMappings,
-            });
-
-            this.writeConfig(nextConfig);
-            Object.assign(config, nextConfig);
-
-            await this.sendTelegramMessage(
-                config.botToken,
-                chatId,
-                [
-                    'Custom binding removed for this Telegram chat.',
-                    `Linked chat: ${this.getSelectedChatLabel(config, chatId)}`,
+                    'Linked SillyTavern chat cleared.',
+                    `Linked chat: ${this.getSelectedChatLabel(config)}`,
                 ].join('\n'),
             );
             return;
@@ -980,7 +960,7 @@ class TelegramBridgeManager {
     }
 
     isAuthorized(config, chatId) {
-        return config.allowAllChats || config.authorizedChatIds.includes(String(chatId));
+        return config.allowAllChats || normalizeChatId(config.authorizedChatId) === normalizeChatId(chatId);
     }
 
     listAvailableChats(userHandle) {
@@ -1038,17 +1018,8 @@ class TelegramBridgeManager {
         };
     }
 
-    getSelectedChatForTelegram(config, chatId = '') {
-        const telegramChatId = String(chatId ?? '').trim();
-        if (telegramChatId && config.chatMappings?.[telegramChatId]) {
-            return normalizeSelectedChat(config.chatMappings[telegramChatId]);
-        }
-
-        return normalizeSelectedChat(config.selectedChat);
-    }
-
-    getSelectedChatLabel(config, chatId = '') {
-        const selectedChat = this.getSelectedChatForTelegram(config, chatId);
+    getSelectedChatLabel(config) {
+        const selectedChat = normalizeSelectedChat(config.selectedChat);
         if (!selectedChat.avatarUrl || !selectedChat.chatFile) {
             return 'No SillyTavern chat selected';
         }
@@ -1063,9 +1034,8 @@ class TelegramBridgeManager {
         return `${selectedChat.avatarUrl} | ${selectedChat.chatFile}`;
     }
 
-    getLinkedChatContext(config, chatId = '') {
-        const selectedChat = this.getSelectedChatForTelegram(config, chatId);
-        const selection = this.resolveSelectedChat(config.userHandle, selectedChat, false);
+    getLinkedChatContext(config) {
+        const selection = this.resolveSelectedChat(config.userHandle, config.selectedChat, false);
         if (!selection) {
             return null;
         }
@@ -1166,7 +1136,7 @@ class TelegramBridgeManager {
     buildRequestBody(runtime, config, state, chatId, input) {
         const settings = runtime.oaiSettings;
         const messages = [];
-        const linkedChat = this.getLinkedChatContext(config, chatId);
+        const linkedChat = this.getLinkedChatContext(config);
         let history = [];
 
         if (linkedChat) {
@@ -1260,7 +1230,7 @@ class TelegramBridgeManager {
     }
 
     async appendToLinkedChat(config, runtime, chatId, userInput, assistantReply) {
-        const linkedChat = this.getLinkedChatContext(config, chatId);
+        const linkedChat = this.getLinkedChatContext(config);
         if (!linkedChat) {
             return false;
         }

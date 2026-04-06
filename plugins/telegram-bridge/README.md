@@ -8,7 +8,7 @@ Server plugin for SillyTavern that powers the Telegram Bridge integration.
 - authorizes Telegram chats
 - forwards messages to the configured upstream chat-completions provider
 - appends replies into the linked SillyTavern chat when configured
-- supports per-Telegram-chat linked SillyTavern chat mappings
+- supports a single authorized Telegram chat ID with switchable linked SillyTavern chats
 - exposes management endpoints for the front-end extension
 
 ## Configuration File
@@ -45,7 +45,7 @@ The front-end extension is responsible for configuring:
 
 - whether the bridge is enabled
 - the Telegram bot token
-- authorized Telegram chat IDs
+- the authorized Telegram chat ID
 - the linked SillyTavern chat
 
 The bot itself also supports:

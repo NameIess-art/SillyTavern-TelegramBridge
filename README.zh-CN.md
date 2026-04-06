@@ -2,32 +2,33 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md) | [日本語](./README.ja.md)
 
-适用于 SillyTavern 的 Telegram Bridge，按可分发形式打包为：
+这是一个适用于 SillyTavern 的 Telegram Bridge 分发包，包含两部分：
 
-- 位于 `plugins/telegram-bridge` 的后端服务端插件
-- 位于 `extensions/telegram-bridge` 的前端扩展
+- `plugins/telegram-bridge` 服务端插件
+- `extensions/telegram-bridge` 前端扩展
 
-这个桥接支持：
+它可以让你：
 
-- 将 Telegram Bot 接入 SillyTavern
-- 在前端选择要绑定的 SillyTavern 聊天
-- 在前端配置 `botToken` 和 Telegram `Chat ID`
-- 让 Telegram 对话继续走所选的 SillyTavern 聊天上下文
+- 把一个 Telegram Bot 接入 SillyTavern
+- 在前端填写 `botToken` 和单个授权用的 Telegram `Chat ID`
+- 在前端选择当前绑定的 SillyTavern 聊天
+- 之后直接在 Telegram 里用 `/chats` 和 `/bind <number>` 切换绑定聊天
+- 让 Telegram 对话继续走当前所选的 SillyTavern 聊天上下文
 
 ## 包含内容
 
 - `plugins/telegram-bridge`
-  SillyTavern 在启用 `enableServerPlugins: true` 后加载的服务端插件。
+  当 `enableServerPlugins: true` 启用时，由 SillyTavern 加载的服务端插件。
 - `extensions/telegram-bridge`
   显示在 SillyTavern 扩展面板中的前端扩展。
 - `install.ps1`
-  用于将这两部分安装到现有 SillyTavern 目录中的 Windows 安装脚本。
+  用于把上述两部分复制到现有 SillyTavern 安装目录的 Windows 安装脚本。
 
 ## 运行要求
 
 - 已启用服务端插件的 SillyTavern
 - 通过 `@BotFather` 创建的 Telegram Bot
-- 已在 SillyTavern 中配置好的可用上游 chat-completions 提供方
+- 已在 SillyTavern 中配置好的可用 chat-completions 上游
 
 ## 快速开始
 
@@ -46,9 +47,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -SillyTavernRoot "E:\Path
 
 ### 手动安装
 
-1. 将 `plugins/telegram-bridge` 复制到 SillyTavern 的 `plugins` 目录。
-2. 将 `extensions/telegram-bridge` 复制到 `data/<你的用户句柄>/extensions/telegram-bridge`。
-3. 打开 SillyTavern 的 `config.yaml`，确认启用：
+1. 把 `plugins/telegram-bridge` 复制到 SillyTavern 的 `plugins` 目录。
+2. 把 `extensions/telegram-bridge` 复制到 `data/<your-user-handle>/extensions/telegram-bridge`。
+3. 打开 SillyTavern 的 `config.yaml`，确认已启用：
 
 ```yaml
 enableServerPlugins: true
@@ -63,15 +64,36 @@ enableServerPlugins: true
 
 1. 启用桥接
 2. 填入 Telegram `botToken`
-3. 填入一个或多个 Telegram `Chat ID`
-4. 选择要绑定的 SillyTavern 聊天
+3. 填入你的 Telegram `Chat ID`
+4. 选择默认绑定的 SillyTavern 聊天
 5. 保存
 
 获取 Telegram Chat ID 的方式：
 
-1. 给你的 Bot 发送 `/start`
-2. 给你的 Bot 发送 `/whoami`
-3. 复制返回消息中的 `Chat ID`
+1. 给 Bot 发送 `/start`
+2. 给 Bot 发送 `/whoami`
+3. 复制回复里的 `Chat ID`
+
+## Telegram 命令
+
+Bot 支持以下命令：
+
+- `/help`
+- `/whoami`
+- `/status`
+- `/currentchat`
+- `/chats`
+- `/bind <number>`
+- `/unbind`
+- `/reset`
+
+推荐流程：
+
+1. 发送 `/chats`
+2. 记下你想切换到的 SillyTavern 聊天编号
+3. 发送 `/bind <number>`
+
+这样就能直接在 Telegram 里切换当前绑定聊天，而不必回到前端设置页。
 
 ## 项目结构
 
@@ -98,7 +120,7 @@ SillyTavern-TelegramBridge/
 
 ## API 路由
 
-服务端插件会挂载到：
+服务端插件挂载在：
 
 `/api/plugins/telegram-bridge`
 
@@ -128,15 +150,15 @@ SillyTavern-TelegramBridge/
 ### Telegram 返回 bridge 错误
 
 - 确认 bot token 有效
-- 确认 Telegram chat ID 已被授权
+- 确认 Telegram Chat ID 已被授权
 - 确认 SillyTavern 的上游模型连接正常
-- 检查 `/api/plugins/telegram-bridge/status` 中的 `lastError`
+- 查看 `/api/plugins/telegram-bridge/status` 中的 `lastError`
 
 ## 开发说明
 
 - 服务端插件适配 SillyTavern 的 server plugin loader。
 - 前端扩展适配 SillyTavern 的用户级或全局 third-party extension 体系。
-- 当前仓库还没有声明开源许可证；如果你希望更广泛分发，建议补充明确的许可证文件。
+- 当前仓库还没有明确的开源许可证；如果你要公开分发，建议补充 LICENSE。
 
 ## 贡献
 

@@ -6,13 +6,6 @@ const API_BASE = '/api/plugins/telegram-bridge';
 
 let availableChats = [];
 
-function splitChatIds(value) {
-    return [...new Set(String(value ?? '')
-        .split(/[\s,]+/)
-        .map(id => id.trim())
-        .filter(Boolean))];
-}
-
 function makeChatValue(selectedChat) {
     if (!selectedChat?.avatarUrl || !selectedChat?.chatFile) {
         return '';
@@ -39,8 +32,7 @@ function getSelectedChatFromValue(value) {
 }
 
 function setBusy(isBusy) {
-    $('#tg_bridge_save, #tg_bridge_reload, #tg_bridge_reset_history, #tg_bridge_refresh_chats, #tg_bridge_add_mapping').toggleClass('disabled', isBusy);
-    $('#tg_bridge_mappings .telegram-bridge-remove-mapping').toggleClass('disabled', isBusy);
+    $('#tg_bridge_save, #tg_bridge_reload, #tg_bridge_reset_history, #tg_bridge_refresh_chats').toggleClass('disabled', isBusy);
 }
 
 function setStatus(status) {
@@ -93,7 +85,7 @@ function appendChatOptions(select, selectedChat = null) {
 function updateSelectedChatMeta() {
     const selected = getSelectedChatFromValue($('#tg_bridge_chat_select').val());
     if (!selected.avatarUrl || !selected.chatFile) {
-        $('#tg_bridge_selected_meta').text('No default SillyTavern chat selected.');
+        $('#tg_bridge_selected_meta').text('No SillyTavern chat selected. You can also switch later with /bind inside Telegram.');
         return;
     }
 
@@ -107,113 +99,13 @@ function updateSelectedChatMeta() {
     $('#tg_bridge_selected_meta').text(`Character: ${chat.characterName} | Updated: ${updatedAt}`);
 }
 
-function updateMappingRowMeta(row) {
-    const chatId = String(row.find('.telegram-bridge-chat-id').val() ?? '').trim();
-    const selectedChat = getSelectedChatFromValue(row.find('.telegram-bridge-chat-select').val());
-    const meta = row.find('.telegram-bridge-mapping-meta');
-
-    if (!chatId && !selectedChat.avatarUrl) {
-        meta.text('Telegram chats without a mapping use the default chat.');
-        return;
-    }
-
-    if (!selectedChat.avatarUrl || !selectedChat.chatFile) {
-        meta.text('This Telegram Chat ID has no linked SillyTavern chat yet.');
-        return;
-    }
-
-    const chat = availableChats.find(item => item.avatarUrl === selectedChat.avatarUrl && item.chatFile === selectedChat.chatFile);
-    const chatName = chat?.characterName || selectedChat.avatarUrl;
-    meta.text(`Telegram Chat ID ${chatId || '(unset)'} -> ${chatName} / ${selectedChat.chatFile}`);
-}
-
-function createMappingRow(chatId = '', selectedChat = null) {
-    const row = $(`
-        <div class="telegram-bridge-mapping-row">
-            <div class="telegram-bridge-mapping-grid">
-                <div>
-                    <label>Telegram Chat ID</label>
-                    <input class="telegram-bridge-chat-id text_pole" type="text" placeholder="123456789" />
-                </div>
-                <div>
-                    <label>Linked SillyTavern Chat</label>
-                    <select class="telegram-bridge-chat-select text_pole"></select>
-                </div>
-                <div>
-                    <div class="telegram-bridge-remove-mapping menu_button menu_button_icon" title="Remove mapping">
-                        <i class="fa-solid fa-trash-can"></i>
-                    </div>
-                </div>
-            </div>
-            <div class="telegram-bridge-mapping-meta"></div>
-        </div>
-    `);
-
-    row.find('.telegram-bridge-chat-id').val(chatId);
-    appendChatOptions(row.find('.telegram-bridge-chat-select'), selectedChat);
-    updateMappingRowMeta(row);
-
-    row.find('.telegram-bridge-chat-id').on('input', () => updateMappingRowMeta(row));
-    row.find('.telegram-bridge-chat-select').on('change', () => updateMappingRowMeta(row));
-    row.find('.telegram-bridge-remove-mapping').on('click', () => {
-        row.remove();
-        ensureAtLeastOneEmptyMappingRow();
-    });
-
-    return row;
-}
-
-function ensureAtLeastOneEmptyMappingRow() {
-    if ($('#tg_bridge_mappings .telegram-bridge-mapping-row').length === 0) {
-        $('#tg_bridge_mappings').append(createMappingRow());
-    }
-}
-
-function populateMappings(chatMappings = {}) {
-    const container = $('#tg_bridge_mappings');
-    container.empty();
-
-    const entries = Object.entries(chatMappings || {}).sort(([left], [right]) => left.localeCompare(right));
-    if (entries.length === 0) {
-        container.append(createMappingRow());
-        return;
-    }
-
-    for (const [chatId, selectedChat] of entries) {
-        container.append(createMappingRow(chatId, selectedChat));
-    }
-}
-
-function readMappingsFromForm() {
-    const mappings = {};
-
-    $('#tg_bridge_mappings .telegram-bridge-mapping-row').each((_, element) => {
-        const row = $(element);
-        const chatId = String(row.find('.telegram-bridge-chat-id').val() ?? '').trim();
-        const selectedChat = getSelectedChatFromValue(row.find('.telegram-bridge-chat-select').val());
-
-        if (!chatId || !selectedChat.avatarUrl || !selectedChat.chatFile) {
-            return;
-        }
-
-        mappings[chatId] = selectedChat;
-    });
-
-    return mappings;
-}
-
-function populateDefaultChat(selectedChat) {
-    appendChatOptions($('#tg_bridge_chat_select'), selectedChat);
-    updateSelectedChatMeta();
-}
-
 function populateForm(config) {
     $('#tg_bridge_enabled').prop('checked', !!config.enabled);
     $('#tg_bridge_bot_token').val(String(config.botToken ?? ''));
     $('#tg_bridge_allow_all').prop('checked', !!config.allowAllChats);
-    $('#tg_bridge_chat_ids').val(Array.isArray(config.authorizedChatIds) ? config.authorizedChatIds.join('\n') : '');
-    populateDefaultChat(config.selectedChat);
-    populateMappings(config.chatMappings);
+    $('#tg_bridge_chat_id').val(String(config.authorizedChatId ?? ''));
+    appendChatOptions($('#tg_bridge_chat_select'), config.selectedChat);
+    updateSelectedChatMeta();
 }
 
 async function apiRequest(path, options = {}) {
@@ -258,7 +150,6 @@ async function loadBridgeState() {
         populateForm({
             ...config,
             selectedChat: chatsPayload.selectedChat || config.selectedChat,
-            chatMappings: chatsPayload.chatMappings || config.chatMappings || {},
         });
         setStatus(status);
     } catch (error) {
@@ -280,9 +171,8 @@ async function onSaveClick() {
             enabled: $('#tg_bridge_enabled').prop('checked'),
             botToken: String($('#tg_bridge_bot_token').val() ?? '').trim(),
             allowAllChats: $('#tg_bridge_allow_all').prop('checked'),
-            authorizedChatIds: splitChatIds($('#tg_bridge_chat_ids').val()),
+            authorizedChatId: String($('#tg_bridge_chat_id').val() ?? '').trim(),
             selectedChat: getSelectedChatFromValue($('#tg_bridge_chat_select').val()),
-            chatMappings: readMappingsFromForm(),
         };
 
         await apiRequest('/config', {
@@ -303,8 +193,8 @@ async function onResetClick() {
     setBusy(true);
 
     try {
-        const chatIds = splitChatIds($('#tg_bridge_chat_ids').val());
-        const payload = chatIds.length > 0 ? { chatId: chatIds[0] } : {};
+        const chatId = String($('#tg_bridge_chat_id').val() ?? '').trim();
+        const payload = chatId ? { chatId } : {};
         await apiRequest('/reset', {
             method: 'POST',
             body: JSON.stringify(payload),
@@ -328,9 +218,6 @@ jQuery(async () => {
     $('#extensions_settings2').append(html);
 
     $('#tg_bridge_chat_select').on('change', updateSelectedChatMeta);
-    $('#tg_bridge_add_mapping').on('click', () => {
-        $('#tg_bridge_mappings').append(createMappingRow());
-    });
     $('#tg_bridge_save').on('click', onSaveClick);
     $('#tg_bridge_reload').on('click', loadBridgeState);
     $('#tg_bridge_reset_history').on('click', onResetClick);
