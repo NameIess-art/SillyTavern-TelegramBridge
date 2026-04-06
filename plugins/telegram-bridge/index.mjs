@@ -285,6 +285,17 @@ function stripActionMarkers(text) {
     return String(text ?? '').trim().replace(/^\*([\s\S]*)\*$/u, '$1').trim();
 }
 
+function renderDialogueParagraph(text) {
+    const inlineHtml = formatTelegramInlineText(text);
+    return `<blockquote><b>${inlineHtml}</b></blockquote>`;
+}
+
+function renderActionParagraph(text) {
+    const actionText = stripActionMarkers(text);
+    const inlineActionHtml = formatTelegramInlineText(actionText);
+    return `<blockquote><i>${inlineActionHtml}</i></blockquote>`;
+}
+
 function formatTelegramInlineText(text) {
     const placeholders = [];
     let working = String(text ?? '').replace(/\r\n/g, '\n');
@@ -327,17 +338,14 @@ function formatTelegramText(text) {
         }
 
         if (isActionParagraph(trimmed)) {
-            const actionText = stripActionMarkers(trimmed);
-            const inlineActionHtml = formatTelegramInlineText(actionText);
-            return `<i>${inlineActionHtml}</i>`;
+            return renderActionParagraph(trimmed);
         }
 
-        const inlineHtml = formatTelegramInlineText(rawParagraph);
         if (isDialogueParagraph(trimmed)) {
-            return `<blockquote>${inlineHtml}</blockquote>`;
+            return renderDialogueParagraph(rawParagraph);
         }
 
-        return inlineHtml;
+        return formatTelegramInlineText(rawParagraph);
     });
 
     return rendered.join('\n\n');
