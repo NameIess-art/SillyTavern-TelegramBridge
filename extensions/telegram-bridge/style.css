@@ -55,3 +55,36 @@
 #telegram_bridge_settings #tg_bridge_selected_meta {
     min-height: 18px;
 }
+
+#telegram_bridge_settings .telegram-bridge-mappings {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+#telegram_bridge_settings .telegram-bridge-mapping-row {
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+#telegram_bridge_settings .telegram-bridge-mapping-grid {
+    display: grid;
+    grid-template-columns: minmax(130px, 1fr) minmax(220px, 2fr) auto;
+    gap: 8px;
+    align-items: end;
+}
+
+#telegram_bridge_settings .telegram-bridge-mapping-meta {
+    margin-top: 6px;
+    font-size: 12px;
+    opacity: 0.8;
+    word-break: break-word;
+}
+
+@media (max-width: 900px) {
+    #telegram_bridge_settings .telegram-bridge-mapping-grid {
+        grid-template-columns: 1fr;
+    }
+}

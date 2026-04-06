@@ -32,7 +32,7 @@
             <small class="telegram-bridge-muted">Send <code>/start</code> or <code>/whoami</code> to your bot to get the current chat ID.</small>
 
             <label for="tg_bridge_chat_select" class="flex-container justifySpaceBetween alignItemsCenter">
-                <span>Linked SillyTavern Chat</span>
+                <span>Default SillyTavern Chat</span>
                 <div id="tg_bridge_refresh_chats" class="right_menu_button margin0" title="Refresh available chats">
                     <i class="fa-solid fa-rotate"></i>
                 </div>
@@ -41,6 +41,15 @@
                 <option value="">No chat selected</option>
             </select>
             <div id="tg_bridge_selected_meta" class="telegram-bridge-muted"></div>
+
+            <div class="telegram-bridge-mappings-header flex-container justifySpaceBetween alignItemsCenter marginTop10">
+                <label class="margin0">Per-Chat Mappings</label>
+                <div id="tg_bridge_add_mapping" class="menu_button menu_button_icon margin0" title="Add Telegram chat mapping">
+                    <i class="fa-solid fa-plus"></i>
+                </div>
+            </div>
+            <div id="tg_bridge_mappings" class="telegram-bridge-mappings"></div>
+            <small class="telegram-bridge-muted">Each Telegram Chat ID can be linked to a different SillyTavern chat. Unmapped chats use the default chat above.</small>
 
             <div class="flex-container gap5px marginTop10">
                 <div id="tg_bridge_save" class="menu_button flex1">

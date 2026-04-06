@@ -8,6 +8,7 @@ Server plugin for SillyTavern that powers the Telegram Bridge integration.
 - authorizes Telegram chats
 - forwards messages to the configured upstream chat-completions provider
 - appends replies into the linked SillyTavern chat when configured
+- supports per-Telegram-chat linked SillyTavern chat mappings
 - exposes management endpoints for the front-end extension
 
 ## Configuration File

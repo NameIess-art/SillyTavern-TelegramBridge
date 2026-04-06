@@ -30,6 +30,7 @@ const DEFAULT_CONFIG = Object.freeze({
         apiKey: '',
         model: '',
     },
+    chatMappings: {},
     selectedChat: {
         avatarUrl: '',
         chatFile: '',
@@ -175,6 +176,25 @@ function normalizeChatIds(chatIds) {
     return [...new Set(chatIds.map(id => String(id).trim()).filter(Boolean))];
 }
 
+function normalizeSelectedChat(selectedChat = {}) {
+    return {
+        avatarUrl: String(selectedChat?.avatarUrl ?? '').trim(),
+        chatFile: String(selectedChat?.chatFile ?? '').trim(),
+    };
+}
+
+function normalizeChatMappings(chatMappings) {
+    if (!chatMappings || typeof chatMappings !== 'object' || Array.isArray(chatMappings)) {
+        return {};
+    }
+
+    return Object.fromEntries(
+        Object.entries(chatMappings)
+            .map(([chatId, selectedChat]) => [String(chatId).trim(), normalizeSelectedChat(selectedChat)])
+            .filter(([chatId, selectedChat]) => chatId && selectedChat.avatarUrl && selectedChat.chatFile),
+    );
+}
+
 function normalizeConfig(rawConfig = {}) {
     const providerOverride = typeof rawConfig.providerOverride === 'object' && rawConfig.providerOverride !== null
         ? rawConfig.providerOverride
@@ -196,10 +216,8 @@ function normalizeConfig(rawConfig = {}) {
             apiKey: String(providerOverride.apiKey ?? '').trim(),
             model: String(providerOverride.model ?? '').trim(),
         },
-        selectedChat: {
-            avatarUrl: String(rawConfig.selectedChat?.avatarUrl ?? '').trim(),
-            chatFile: String(rawConfig.selectedChat?.chatFile ?? '').trim(),
-        },
+        chatMappings: normalizeChatMappings(rawConfig.chatMappings),
+        selectedChat: normalizeSelectedChat(rawConfig.selectedChat),
     };
 }
 
@@ -573,6 +591,7 @@ class TelegramBridgeManager {
             const config = this.readConfig();
             response.send({
                 selectedChat: config.selectedChat,
+                chatMappings: config.chatMappings,
                 chats: this.listAvailableChats(config.userHandle),
             });
         });
@@ -594,6 +613,18 @@ class TelegramBridgeManager {
 
             if (isMaskedSecret(next.providerOverride.apiKey)) {
                 next.providerOverride.apiKey = current.providerOverride.apiKey;
+            }
+
+            if (next.selectedChat?.avatarUrl || next.selectedChat?.chatFile) {
+                this.resolveSelectedChat(next.userHandle, next.selectedChat, true);
+            }
+
+            for (const [mappedChatId, mappedSelectedChat] of Object.entries(next.chatMappings ?? {})) {
+                if (!mappedChatId) {
+                    continue;
+                }
+
+                this.resolveSelectedChat(next.userHandle, mappedSelectedChat, true);
             }
 
             this.writeConfig(next);
@@ -910,8 +941,18 @@ class TelegramBridgeManager {
         };
     }
 
-    getLinkedChatContext(config) {
-        const selection = this.resolveSelectedChat(config.userHandle, config.selectedChat, false);
+    getSelectedChatForTelegram(config, chatId = '') {
+        const telegramChatId = String(chatId ?? '').trim();
+        if (telegramChatId && config.chatMappings?.[telegramChatId]) {
+            return normalizeSelectedChat(config.chatMappings[telegramChatId]);
+        }
+
+        return normalizeSelectedChat(config.selectedChat);
+    }
+
+    getLinkedChatContext(config, chatId = '') {
+        const selectedChat = this.getSelectedChatForTelegram(config, chatId);
+        const selection = this.resolveSelectedChat(config.userHandle, selectedChat, false);
         if (!selection) {
             return null;
         }
@@ -1012,7 +1053,7 @@ class TelegramBridgeManager {
     buildRequestBody(runtime, config, state, chatId, input) {
         const settings = runtime.oaiSettings;
         const messages = [];
-        const linkedChat = this.getLinkedChatContext(config);
+        const linkedChat = this.getLinkedChatContext(config, chatId);
         let history = [];
 
         if (linkedChat) {
@@ -1105,8 +1146,8 @@ class TelegramBridgeManager {
         return compactObject(body);
     }
 
-    async appendToLinkedChat(config, runtime, userInput, assistantReply) {
-        const linkedChat = this.getLinkedChatContext(config);
+    async appendToLinkedChat(config, runtime, chatId, userInput, assistantReply) {
+        const linkedChat = this.getLinkedChatContext(config, chatId);
         if (!linkedChat) {
             return false;
         }
@@ -1226,7 +1267,7 @@ class TelegramBridgeManager {
             throw new Error('Upstream returned no assistant text.');
         }
 
-        const persistedToStChat = await this.appendToLinkedChat(config, runtime, input, assistantReply);
+        const persistedToStChat = await this.appendToLinkedChat(config, runtime, chatId, input, assistantReply);
         if (!persistedToStChat) {
             this.updateConversation(state, chatId, input, assistantReply, config.historyLimit);
             this.writeState(state);

@@ -12,6 +12,7 @@ This bridge lets you:
 - connect a Telegram bot to SillyTavern
 - choose which SillyTavern chat is linked from the front end
 - configure `botToken` and Telegram `Chat ID` from the front end
+- map different Telegram chats to different SillyTavern chats with one bot
 - keep Telegram conversations routed through a selected SillyTavern chat context
 
 ## What Is Included
@@ -64,8 +65,9 @@ After installation, open the `Telegram Bridge` settings drawer in SillyTavern an
 1. enable the bridge
 2. paste your Telegram `botToken`
 3. enter one or more Telegram `Chat ID` values
-4. choose which SillyTavern chat should be linked
-5. save
+4. choose a default SillyTavern chat
+5. optionally add per-chat mappings for specific Telegram `Chat ID` values
+6. save
 
 To discover your Telegram chat ID:
 
