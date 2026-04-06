@@ -253,6 +253,43 @@ function splitTelegramMessage(text, limit = 4000) {
     return chunks.length > 0 ? chunks : [''];
 }
 
+function escapeTelegramHtml(text) {
+    return String(text ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+}
+
+function formatTelegramText(text) {
+    const placeholders = [];
+    let working = String(text ?? '').replace(/\r\n/g, '\n');
+
+    const reserve = (rendered) => {
+        const token = `\uE000${placeholders.length}\uE001`;
+        placeholders.push(rendered);
+        return token;
+    };
+
+    working = working.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_, language, code) => {
+        const languageLabel = String(language ?? '').trim();
+        const safeCode = escapeTelegramHtml(code).replace(/^\n+|\n+$/g, '');
+        const safeLanguage = escapeTelegramHtml(languageLabel);
+        const content = safeLanguage
+            ? `<pre><code class="language-${safeLanguage}">${safeCode}</code></pre>`
+            : `<pre><code>${safeCode}</code></pre>`;
+        return reserve(content);
+    });
+
+    working = working.replace(/`([^`\n]+)`/g, (_, code) => reserve(`<code>${escapeTelegramHtml(code)}</code>`));
+
+    working = escapeTelegramHtml(working);
+    working = working.replace(/\*\*([^\n*][\s\S]*?[^\n*])\*\*/g, '<b>$1</b>');
+    working = working.replace(/(^|\n)\*([^\n][^\n]*?)\*(?=\n|$)/g, '$1<i>$2</i>');
+    working = working.replace(/(^|[\s([{'"“‘])\*([^*\n][^*\n]*?)\*(?=[$\s)\]}.,!?:;'"”’]|$)/g, '$1<i>$2</i>');
+
+    return working.replace(/\uE000(\d+)\uE001/g, (_, index) => placeholders[Number(index)] ?? '');
+}
+
 function extractTextParts(value) {
     if (typeof value === 'string') {
         return value;
@@ -1265,6 +1302,7 @@ class TelegramBridgeManager {
         const chunks = splitTelegramMessage(text);
         const messages = [];
         for (const chunk of chunks) {
+            const renderedChunk = formatTelegramText(chunk);
             const response = await this.fetchWithTimeout(
                 this.telegramUrl(botToken, 'sendMessage'),
                 {
@@ -1274,7 +1312,9 @@ class TelegramBridgeManager {
                     },
                     body: JSON.stringify({
                         chat_id: chatId,
-                        text: chunk,
+                        text: renderedChunk,
+                        parse_mode: 'HTML',
+                        disable_web_page_preview: true,
                     }),
                 },
                 30000,
@@ -1292,6 +1332,7 @@ class TelegramBridgeManager {
     }
 
     async editTelegramMessage(botToken, chatId, messageId, text) {
+        const renderedText = formatTelegramText(text);
         const response = await this.fetchWithTimeout(
             this.telegramUrl(botToken, 'editMessageText'),
             {
@@ -1302,13 +1343,19 @@ class TelegramBridgeManager {
                 body: JSON.stringify({
                     chat_id: chatId,
                     message_id: messageId,
-                    text,
+                    text: renderedText,
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true,
                 }),
             },
             30000,
         );
 
         const payload = await response.json();
+        if (payload?.description && String(payload.description).includes('message is not modified')) {
+            return payload.result ?? null;
+        }
+
         if (!response.ok || payload?.ok !== true) {
             throw new Error(`Telegram editMessageText failed: ${extractErrorMessage(response.status, JSON.stringify(payload), payload)}`);
         }
