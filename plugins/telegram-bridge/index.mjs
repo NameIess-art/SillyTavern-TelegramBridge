@@ -272,6 +272,19 @@ function isDialogueParagraph(text) {
     );
 }
 
+function isActionParagraph(text) {
+    const trimmed = String(text ?? '').trim();
+    if (trimmed.length < 3) {
+        return false;
+    }
+
+    return /^\*[\s\S]*\*$/u.test(trimmed) && !/^\*\*[\s\S]*\*\*$/u.test(trimmed);
+}
+
+function stripActionMarkers(text) {
+    return String(text ?? '').trim().replace(/^\*([\s\S]*)\*$/u, '$1').trim();
+}
+
 function formatTelegramInlineText(text) {
     const placeholders = [];
     let working = String(text ?? '').replace(/\r\n/g, '\n');
@@ -311,6 +324,12 @@ function formatTelegramText(text) {
 
         if (!trimmed) {
             return '';
+        }
+
+        if (isActionParagraph(trimmed)) {
+            const actionText = stripActionMarkers(trimmed);
+            const inlineActionHtml = formatTelegramInlineText(actionText);
+            return `<i>${inlineActionHtml}</i>`;
         }
 
         const inlineHtml = formatTelegramInlineText(rawParagraph);
