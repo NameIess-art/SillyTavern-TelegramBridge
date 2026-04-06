@@ -260,7 +260,19 @@ function escapeTelegramHtml(text) {
         .replaceAll('>', '&gt;');
 }
 
-function formatTelegramText(text) {
+function isDialogueParagraph(text) {
+    const trimmed = String(text ?? '').trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    return (
+        /^[“"][\s\S]*[”"]$/u.test(trimmed)
+        || /^[「『][\s\S]*[」』]$/u.test(trimmed)
+    );
+}
+
+function formatTelegramInlineText(text) {
     const placeholders = [];
     let working = String(text ?? '').replace(/\r\n/g, '\n');
 
@@ -288,6 +300,36 @@ function formatTelegramText(text) {
     working = working.replace(/(^|[\s([{'"“‘])\*([^*\n][^*\n]*?)\*(?=[$\s)\]}.,!?:;'"”’]|$)/g, '$1<i>$2</i>');
 
     return working.replace(/\uE000(\d+)\uE001/g, (_, index) => placeholders[Number(index)] ?? '');
+}
+
+function formatTelegramText(text) {
+    const normalized = String(text ?? '').replace(/\r\n/g, '\n');
+    const paragraphs = normalized.split(/\n{2,}/u);
+    const rendered = paragraphs.map(paragraph => {
+        const rawParagraph = String(paragraph ?? '');
+        const trimmed = rawParagraph.trim();
+
+        if (!trimmed) {
+            return '';
+        }
+
+        const inlineHtml = formatTelegramInlineText(rawParagraph);
+        if (isDialogueParagraph(trimmed)) {
+            return `<blockquote>${inlineHtml}</blockquote>`;
+        }
+
+        return inlineHtml;
+    });
+
+    return rendered.join('\n\n');
+}
+
+function shouldRetryTelegramWithoutFormatting(payload) {
+    const description = String(payload?.description ?? '').toLowerCase();
+    return description.includes('can\'t parse entities')
+        || description.includes('unsupported start tag')
+        || description.includes('unsupported end tag')
+        || description.includes('tag') && description.includes('entity');
 }
 
 function extractTextParts(value) {
@@ -1302,8 +1344,7 @@ class TelegramBridgeManager {
         const chunks = splitTelegramMessage(text);
         const messages = [];
         for (const chunk of chunks) {
-            const renderedChunk = formatTelegramText(chunk);
-            const response = await this.fetchWithTimeout(
+            let response = await this.fetchWithTimeout(
                 this.telegramUrl(botToken, 'sendMessage'),
                 {
                     method: 'POST',
@@ -1312,7 +1353,7 @@ class TelegramBridgeManager {
                     },
                     body: JSON.stringify({
                         chat_id: chatId,
-                        text: renderedChunk,
+                        text: formatTelegramText(chunk),
                         parse_mode: 'HTML',
                         disable_web_page_preview: true,
                     }),
@@ -1320,7 +1361,26 @@ class TelegramBridgeManager {
                 30000,
             );
 
-            const payload = await response.json();
+            let payload = await response.json();
+            if ((!response.ok || payload?.ok !== true) && shouldRetryTelegramWithoutFormatting(payload)) {
+                response = await this.fetchWithTimeout(
+                    this.telegramUrl(botToken, 'sendMessage'),
+                    {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            chat_id: chatId,
+                            text: chunk,
+                            disable_web_page_preview: true,
+                        }),
+                    },
+                    30000,
+                );
+                payload = await response.json();
+            }
+
             if (!response.ok || payload?.ok !== true) {
                 throw new Error(`Telegram sendMessage failed: ${extractErrorMessage(response.status, JSON.stringify(payload), payload)}`);
             }
@@ -1332,8 +1392,7 @@ class TelegramBridgeManager {
     }
 
     async editTelegramMessage(botToken, chatId, messageId, text) {
-        const renderedText = formatTelegramText(text);
-        const response = await this.fetchWithTimeout(
+        let response = await this.fetchWithTimeout(
             this.telegramUrl(botToken, 'editMessageText'),
             {
                 method: 'POST',
@@ -1343,7 +1402,7 @@ class TelegramBridgeManager {
                 body: JSON.stringify({
                     chat_id: chatId,
                     message_id: messageId,
-                    text: renderedText,
+                    text: formatTelegramText(text),
                     parse_mode: 'HTML',
                     disable_web_page_preview: true,
                 }),
@@ -1351,7 +1410,27 @@ class TelegramBridgeManager {
             30000,
         );
 
-        const payload = await response.json();
+        let payload = await response.json();
+        if ((!response.ok || payload?.ok !== true) && shouldRetryTelegramWithoutFormatting(payload)) {
+            response = await this.fetchWithTimeout(
+                this.telegramUrl(botToken, 'editMessageText'),
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        message_id: messageId,
+                        text,
+                        disable_web_page_preview: true,
+                    }),
+                },
+                30000,
+            );
+            payload = await response.json();
+        }
+
         if (payload?.description && String(payload.description).includes('message is not modified')) {
             return payload.result ?? null;
         }
