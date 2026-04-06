@@ -1,0 +1,57 @@
+#telegram_bridge_settings .telegram-bridge-status {
+    margin-bottom: 12px;
+}
+
+#telegram_bridge_settings .telegram-bridge-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+#telegram_bridge_settings .telegram-bridge-status-label {
+    font-weight: 600;
+}
+
+#telegram_bridge_settings .telegram-bridge-status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 72px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 1;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+#telegram_bridge_settings .telegram-bridge-status-badge.is-running {
+    background: rgba(76, 175, 80, 0.2);
+    color: #8fe09e;
+}
+
+#telegram_bridge_settings .telegram-bridge-status-badge.is-stopped {
+    background: rgba(255, 152, 0, 0.2);
+    color: #ffcb80;
+}
+
+#telegram_bridge_settings .telegram-bridge-muted {
+    margin-top: 4px;
+    font-size: 12px;
+    opacity: 0.8;
+    word-break: break-word;
+}
+
+#telegram_bridge_settings .telegram-bridge-error {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(198, 40, 40, 0.18);
+    color: #ffb3b3;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#telegram_bridge_settings #tg_bridge_selected_meta {
+    min-height: 18px;
+}

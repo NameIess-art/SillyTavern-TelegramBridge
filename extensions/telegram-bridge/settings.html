@@ -1,0 +1,59 @@
+<div id="telegram_bridge_settings" class="telegram-bridge-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Telegram Bridge</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="telegram-bridge-status">
+                <div class="telegram-bridge-status-row">
+                    <span class="telegram-bridge-status-label">Status</span>
+                    <span id="tg_bridge_status_badge" class="telegram-bridge-status-badge">Loading</span>
+                </div>
+                <div id="tg_bridge_runtime" class="telegram-bridge-muted"></div>
+                <div id="tg_bridge_last_error" class="telegram-bridge-error displayNone"></div>
+            </div>
+
+            <label class="checkbox_label" for="tg_bridge_enabled">
+                <input id="tg_bridge_enabled" type="checkbox" class="checkbox">
+                <span>Enable Telegram bridge</span>
+            </label>
+
+            <label for="tg_bridge_bot_token">Bot Token</label>
+            <input id="tg_bridge_bot_token" class="text_pole" type="password" placeholder="123456789:AA..." autocomplete="off" />
+
+            <label class="checkbox_label" for="tg_bridge_allow_all">
+                <input id="tg_bridge_allow_all" type="checkbox" class="checkbox">
+                <span>Allow all Telegram chats</span>
+            </label>
+
+            <label for="tg_bridge_chat_ids">Chat ID</label>
+            <textarea id="tg_bridge_chat_ids" class="text_pole textarea_compact" rows="2" placeholder="One Chat ID per line, or separate with commas"></textarea>
+            <small class="telegram-bridge-muted">Send <code>/start</code> or <code>/whoami</code> to your bot to get the current chat ID.</small>
+
+            <label for="tg_bridge_chat_select" class="flex-container justifySpaceBetween alignItemsCenter">
+                <span>Linked SillyTavern Chat</span>
+                <div id="tg_bridge_refresh_chats" class="right_menu_button margin0" title="Refresh available chats">
+                    <i class="fa-solid fa-rotate"></i>
+                </div>
+            </label>
+            <select id="tg_bridge_chat_select" class="text_pole">
+                <option value="">No chat selected</option>
+            </select>
+            <div id="tg_bridge_selected_meta" class="telegram-bridge-muted"></div>
+
+            <div class="flex-container gap5px marginTop10">
+                <div id="tg_bridge_save" class="menu_button flex1">
+                    <i class="fa-solid fa-save"></i>
+                    <span>Save</span>
+                </div>
+                <div id="tg_bridge_reload" class="menu_button menu_button_icon" title="Reload bridge status">
+                    <i class="fa-solid fa-arrows-rotate"></i>
+                </div>
+                <div id="tg_bridge_reset_history" class="menu_button menu_button_icon" title="Reset cached Telegram conversation state">
+                    <i class="fa-solid fa-trash-can"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

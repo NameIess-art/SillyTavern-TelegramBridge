@@ -1,0 +1,1130 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { sync as writeFileAtomicSync } from 'write-file-atomic';
+
+import { DEFAULT_USER, SETTINGS_FILE } from '../../src/constants.js';
+import { OPENROUTER_HEADERS, AIMLAPI_HEADERS } from '../../src/constants.js';
+import { readSecret, SECRET_KEYS } from '../../src/endpoints/secrets.js';
+import { getChatData, trySaveChat } from '../../src/endpoints/chats.js';
+import { getUserDirectories } from '../../src/users.js';
+import { trimTrailingSlash } from '../../src/util.js';
+
+const PLUGIN_ID = 'telegram-bridge';
+const TELEGRAM_API = 'https://api.telegram.org';
+const DEFAULT_CONFIG = Object.freeze({
+    enabled: false,
+    botToken: '',
+    allowAllChats: false,
+    authorizedChatIds: [],
+    userHandle: DEFAULT_USER.handle,
+    historyLimit: 12,
+    requestTimeoutMs: 120000,
+    systemPrompt: 'You are replying from a SillyTavern Telegram bridge. Be helpful and stay consistent with the chat context.',
+    replyPrefix: '',
+    providerOverride: {
+        source: '',
+        baseUrl: '',
+        apiKey: '',
+        model: '',
+    },
+    selectedChat: {
+        avatarUrl: '',
+        chatFile: '',
+    },
+});
+const DEFAULT_STATE = Object.freeze({
+    offset: 0,
+    conversations: {},
+    updatedAt: '',
+});
+
+const SOURCE_CONFIG = Object.freeze({
+    openai: {
+        baseUrl: 'https://api.openai.com/v1',
+        secretKey: SECRET_KEYS.OPENAI,
+        modelSetting: 'openai_model',
+        reverseProxy: true,
+    },
+    openrouter: {
+        baseUrl: 'https://openrouter.ai/api/v1',
+        secretKey: SECRET_KEYS.OPENROUTER,
+        modelSetting: 'openrouter_model',
+        headers: OPENROUTER_HEADERS,
+    },
+    custom: {
+        baseUrlFromSettings: 'custom_url',
+        secretKey: SECRET_KEYS.CUSTOM,
+        modelSetting: 'custom_model',
+    },
+    deepseek: {
+        baseUrl: 'https://api.deepseek.com/beta',
+        secretKey: SECRET_KEYS.DEEPSEEK,
+        modelSetting: 'deepseek_model',
+    },
+    groq: {
+        baseUrl: 'https://api.groq.com/openai/v1',
+        secretKey: SECRET_KEYS.GROQ,
+        modelSetting: 'groq_model',
+    },
+    mistralai: {
+        baseUrl: 'https://api.mistral.ai/v1',
+        secretKey: SECRET_KEYS.MISTRALAI,
+        modelSetting: 'mistralai_model',
+    },
+    xai: {
+        baseUrl: 'https://api.x.ai/v1',
+        secretKey: SECRET_KEYS.XAI,
+        modelSetting: 'xai_model',
+    },
+    aimlapi: {
+        baseUrl: 'https://api.aimlapi.com/v1',
+        secretKey: SECRET_KEYS.AIMLAPI,
+        modelSetting: 'aimlapi_model',
+        headers: AIMLAPI_HEADERS,
+    },
+    moonshot: {
+        baseUrl: 'https://api.moonshot.ai/v1',
+        secretKey: SECRET_KEYS.MOONSHOT,
+        modelSetting: 'moonshot_model',
+        reverseProxy: true,
+    },
+    fireworks: {
+        baseUrl: 'https://api.fireworks.ai/inference/v1',
+        secretKey: SECRET_KEYS.FIREWORKS,
+        modelSetting: 'fireworks_model',
+    },
+    siliconflow: {
+        secretKey: SECRET_KEYS.SILICONFLOW,
+        modelSetting: 'siliconflow_model',
+        baseUrlResolver: (settings) => settings.siliconflow_endpoint === 'cn'
+            ? 'https://api.siliconflow.cn/v1'
+            : 'https://api.siliconflow.com/v1',
+    },
+    electronhub: {
+        baseUrl: 'https://api.electronhub.ai/v1',
+        secretKey: SECRET_KEYS.ELECTRONHUB,
+        modelSetting: 'electronhub_model',
+    },
+    nanogpt: {
+        baseUrl: 'https://nano-gpt.com/api/v1',
+        secretKey: SECRET_KEYS.NANOGPT,
+        modelSetting: 'nanogpt_model',
+    },
+});
+
+function ensureDirectory(directoryPath) {
+    if (!fs.existsSync(directoryPath)) {
+        fs.mkdirSync(directoryPath, { recursive: true });
+    }
+}
+
+function cloneJson(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
+function toInteger(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toNumber(value, fallback) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function compactObject(object) {
+    return Object.fromEntries(
+        Object.entries(object).filter(([, value]) => {
+            if (value === undefined || value === null) {
+                return false;
+            }
+
+            if (typeof value === 'number' && Number.isNaN(value)) {
+                return false;
+            }
+
+            return true;
+        }),
+    );
+}
+
+function maskSecret(value) {
+    if (!value) {
+        return '';
+    }
+
+    if (value.length <= 8) {
+        return '*'.repeat(8);
+    }
+
+    return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function isMaskedSecret(value) {
+    return typeof value === 'string' && value.includes('...');
+}
+
+function normalizeChatIds(chatIds) {
+    if (!Array.isArray(chatIds)) {
+        return [];
+    }
+
+    return [...new Set(chatIds.map(id => String(id).trim()).filter(Boolean))];
+}
+
+function normalizeConfig(rawConfig = {}) {
+    const providerOverride = typeof rawConfig.providerOverride === 'object' && rawConfig.providerOverride !== null
+        ? rawConfig.providerOverride
+        : {};
+
+    return {
+        enabled: Boolean(rawConfig.enabled),
+        botToken: String(rawConfig.botToken ?? '').trim(),
+        allowAllChats: Boolean(rawConfig.allowAllChats),
+        authorizedChatIds: normalizeChatIds(rawConfig.authorizedChatIds),
+        userHandle: String(rawConfig.userHandle ?? DEFAULT_CONFIG.userHandle).trim() || DEFAULT_CONFIG.userHandle,
+        historyLimit: Math.max(2, toInteger(rawConfig.historyLimit, DEFAULT_CONFIG.historyLimit)),
+        requestTimeoutMs: Math.max(10000, toInteger(rawConfig.requestTimeoutMs, DEFAULT_CONFIG.requestTimeoutMs)),
+        systemPrompt: String(rawConfig.systemPrompt ?? DEFAULT_CONFIG.systemPrompt),
+        replyPrefix: String(rawConfig.replyPrefix ?? ''),
+        providerOverride: {
+            source: String(providerOverride.source ?? '').trim(),
+            baseUrl: String(providerOverride.baseUrl ?? '').trim(),
+            apiKey: String(providerOverride.apiKey ?? '').trim(),
+            model: String(providerOverride.model ?? '').trim(),
+        },
+        selectedChat: {
+            avatarUrl: String(rawConfig.selectedChat?.avatarUrl ?? '').trim(),
+            chatFile: String(rawConfig.selectedChat?.chatFile ?? '').trim(),
+        },
+    };
+}
+
+function normalizeState(rawState = {}) {
+    const conversations = typeof rawState.conversations === 'object' && rawState.conversations !== null
+        ? rawState.conversations
+        : {};
+    const normalizedConversations = {};
+
+    for (const [chatId, messages] of Object.entries(conversations)) {
+        if (!Array.isArray(messages)) {
+            continue;
+        }
+
+        normalizedConversations[String(chatId)] = messages
+            .filter(message => message && typeof message.role === 'string' && typeof message.content === 'string')
+            .map(message => ({
+                role: message.role,
+                content: message.content,
+            }));
+    }
+
+    return {
+        offset: Math.max(0, toInteger(rawState.offset, 0)),
+        conversations: normalizedConversations,
+        updatedAt: typeof rawState.updatedAt === 'string' ? rawState.updatedAt : '',
+    };
+}
+
+function splitTelegramMessage(text, limit = 4000) {
+    const chunks = [];
+    let remaining = String(text ?? '');
+
+    while (remaining.length > limit) {
+        let splitAt = remaining.lastIndexOf('\n', limit);
+        if (splitAt < limit * 0.5) {
+            splitAt = remaining.lastIndexOf(' ', limit);
+        }
+        if (splitAt < limit * 0.5) {
+            splitAt = limit;
+        }
+
+        chunks.push(remaining.slice(0, splitAt).trim());
+        remaining = remaining.slice(splitAt).trimStart();
+    }
+
+    if (remaining) {
+        chunks.push(remaining);
+    }
+
+    return chunks.length > 0 ? chunks : [''];
+}
+
+function extractTextFromResponse(data) {
+    const content = data?.choices?.[0]?.message?.content;
+    const refusal = data?.choices?.[0]?.message?.refusal;
+    const reasoning = data?.choices?.[0]?.message?.reasoning;
+
+    if (typeof refusal === 'string' && refusal.trim()) {
+        return refusal.trim();
+    }
+
+    if (typeof content === 'string') {
+        return content.trim();
+    }
+
+    if (Array.isArray(content)) {
+        const text = content
+            .map(part => {
+                if (typeof part === 'string') {
+                    return part;
+                }
+
+                if (typeof part?.text === 'string') {
+                    return part.text;
+                }
+
+                return '';
+            })
+            .join('\n')
+            .trim();
+
+        if (text) {
+            return text;
+        }
+    }
+
+    if (typeof data?.choices?.[0]?.text === 'string') {
+        return data.choices[0].text.trim();
+    }
+
+    if (typeof data?.content?.[0]?.text === 'string') {
+        return data.content[0].text.trim();
+    }
+
+    if (typeof reasoning === 'string' && reasoning.trim()) {
+        return `Model returned reasoning only, without assistant text.\n\n${reasoning.trim().slice(0, 1500)}`;
+    }
+
+    return '';
+}
+
+function extractErrorMessage(status, rawText, parsed) {
+    const details = parsed?.error?.message
+        || parsed?.message
+        || parsed?.error
+        || rawText;
+
+    return `HTTP ${status}: ${String(details || 'Unknown upstream error').slice(0, 1000)}`;
+}
+
+function listJsonlFilesRecursive(directoryPath) {
+    const results = [];
+
+    if (!fs.existsSync(directoryPath)) {
+        return results;
+    }
+
+    for (const entry of fs.readdirSync(directoryPath, { withFileTypes: true })) {
+        const fullPath = path.join(directoryPath, entry.name);
+
+        if (entry.isDirectory()) {
+            results.push(...listJsonlFilesRecursive(fullPath));
+            continue;
+        }
+
+        if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.jsonl') {
+            results.push(fullPath);
+        }
+    }
+
+    return results;
+}
+
+class TelegramBridgeManager {
+    constructor() {
+        this.dataDirectory = path.join(globalThis.DATA_ROOT, '_plugins', PLUGIN_ID);
+        this.configPath = path.join(this.dataDirectory, 'config.json');
+        this.statePath = path.join(this.dataDirectory, 'state.json');
+        this.running = false;
+        this.loopPromise = null;
+        this.lastError = '';
+    }
+
+    ensurePaths() {
+        ensureDirectory(this.dataDirectory);
+    }
+
+    readConfig() {
+        this.ensurePaths();
+        if (!fs.existsSync(this.configPath)) {
+            this.writeConfig(DEFAULT_CONFIG);
+        }
+
+        const raw = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+        return normalizeConfig({ ...DEFAULT_CONFIG, ...raw });
+    }
+
+    writeConfig(config) {
+        this.ensurePaths();
+        writeFileAtomicSync(this.configPath, JSON.stringify(normalizeConfig(config), null, 4), 'utf8');
+    }
+
+    readState() {
+        this.ensurePaths();
+        if (!fs.existsSync(this.statePath)) {
+            this.writeState(DEFAULT_STATE);
+        }
+
+        const raw = JSON.parse(fs.readFileSync(this.statePath, 'utf8'));
+        return normalizeState(raw);
+    }
+
+    writeState(state) {
+        this.ensurePaths();
+        const normalized = normalizeState(state);
+        normalized.updatedAt = new Date().toISOString();
+        writeFileAtomicSync(this.statePath, JSON.stringify(normalized, null, 4), 'utf8');
+    }
+
+    getPublicConfig() {
+        const config = this.readConfig();
+        return {
+            ...config,
+            botToken: maskSecret(config.botToken),
+            providerOverride: {
+                ...config.providerOverride,
+                apiKey: maskSecret(config.providerOverride.apiKey),
+            },
+        };
+    }
+
+    async init(router) {
+        router.get('/status', async (_, response) => {
+            const config = this.readConfig();
+            const state = this.readState();
+            let runtime = null;
+            let runtimeError = '';
+
+            try {
+                runtime = this.resolveRuntime(config);
+            } catch (error) {
+                runtimeError = error.message;
+            }
+
+            response.send({
+                running: this.running,
+                lastError: this.lastError,
+                config: this.getPublicConfig(),
+                conversations: Object.keys(state.conversations).length,
+                runtime: runtime ? {
+                    source: runtime.source,
+                    model: runtime.model,
+                    userHandle: runtime.userHandle,
+                    baseUrl: runtime.baseUrl,
+                } : null,
+                runtimeError,
+            });
+        });
+
+        router.get('/config', async (_, response) => {
+            response.send(this.getPublicConfig());
+        });
+
+        router.get('/chats', async (_, response) => {
+            const config = this.readConfig();
+            response.send({
+                selectedChat: config.selectedChat,
+                chats: this.listAvailableChats(config.userHandle),
+            });
+        });
+
+        router.post('/config', async (request, response) => {
+            const current = this.readConfig();
+            const next = normalizeConfig({
+                ...current,
+                ...request.body,
+                providerOverride: {
+                    ...current.providerOverride,
+                    ...(request.body?.providerOverride ?? {}),
+                },
+            });
+
+            if (isMaskedSecret(next.botToken)) {
+                next.botToken = current.botToken;
+            }
+
+            if (isMaskedSecret(next.providerOverride.apiKey)) {
+                next.providerOverride.apiKey = current.providerOverride.apiKey;
+            }
+
+            this.writeConfig(next);
+            await this.restart();
+            response.send({ ok: true, config: this.getPublicConfig() });
+        });
+
+        router.post('/select-chat', async (request, response) => {
+            const current = this.readConfig();
+            const selectedChat = {
+                avatarUrl: String(request.body?.avatarUrl ?? '').trim(),
+                chatFile: String(request.body?.chatFile ?? '').trim(),
+            };
+
+            this.resolveSelectedChat(current.userHandle, selectedChat, true);
+
+            this.writeConfig({
+                ...current,
+                selectedChat,
+            });
+
+            response.send({ ok: true, config: this.getPublicConfig() });
+        });
+
+        router.post('/reset', async (request, response) => {
+            const state = this.readState();
+            const chatId = request.body?.chatId ? String(request.body.chatId) : '';
+
+            if (chatId) {
+                delete state.conversations[chatId];
+            } else {
+                state.conversations = {};
+            }
+
+            this.writeState(state);
+            response.send({ ok: true });
+        });
+
+        await this.startFromDisk();
+    }
+
+    async startFromDisk() {
+        const config = this.readConfig();
+
+        if (!config.enabled || !config.botToken) {
+            this.running = false;
+            return;
+        }
+
+        if (this.running) {
+            return;
+        }
+
+        this.running = true;
+        this.lastError = '';
+        this.loopPromise = this.pollLoop();
+    }
+
+    async stop() {
+        this.running = false;
+
+        if (this.loopPromise) {
+            try {
+                await this.loopPromise;
+            } catch {
+                // Ignore shutdown errors.
+            } finally {
+                this.loopPromise = null;
+            }
+        }
+    }
+
+    async restart() {
+        await this.stop();
+        await this.startFromDisk();
+    }
+
+    async pollLoop() {
+        while (this.running) {
+            const config = this.readConfig();
+
+            if (!config.enabled || !config.botToken) {
+                this.running = false;
+                return;
+            }
+
+            try {
+                await this.fetchAndHandleUpdates(config);
+            } catch (error) {
+                this.lastError = error.message;
+                console.error(`[${PLUGIN_ID}]`, error);
+                await this.delay(5000);
+            }
+        }
+    }
+
+    async delay(ms) {
+        await new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async fetchAndHandleUpdates(config) {
+        const state = this.readState();
+        const response = await this.fetchWithTimeout(
+            this.telegramUrl(config.botToken, 'getUpdates'),
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    offset: state.offset,
+                    timeout: 25,
+                    allowed_updates: ['message'],
+                }),
+            },
+            Math.max(config.requestTimeoutMs, 35000),
+        );
+
+        const payload = await response.json();
+
+        if (!response.ok || payload?.ok !== true) {
+            throw new Error(`Telegram getUpdates failed: ${extractErrorMessage(response.status, JSON.stringify(payload), payload)}`);
+        }
+
+        const updates = Array.isArray(payload.result) ? payload.result : [];
+        if (updates.length === 0) {
+            return;
+        }
+
+        updates.sort((left, right) => left.update_id - right.update_id);
+
+        for (const update of updates) {
+            state.offset = Math.max(state.offset, Number(update.update_id) + 1);
+            await this.handleUpdate(config, state, update);
+        }
+
+        this.writeState(state);
+    }
+
+    async handleUpdate(config, state, update) {
+        const message = update?.message;
+        if (!message?.chat?.id || !message?.text || message?.from?.is_bot) {
+            return;
+        }
+
+        const chatId = String(message.chat.id);
+        const text = String(message.text).trim();
+
+        if (text.startsWith('/')) {
+            await this.handleCommand(config, state, chatId, text);
+            return;
+        }
+
+        if (!this.isAuthorized(config, chatId)) {
+            await this.sendTelegramMessage(config.botToken, chatId, `This chat is not authorized for the SillyTavern bridge.\nChat ID: ${chatId}`);
+            return;
+        }
+
+        await this.sendChatAction(config.botToken, chatId, 'typing');
+
+        try {
+            const reply = await this.generateReply(config, state, chatId, text);
+            await this.sendTelegramMessage(config.botToken, chatId, `${config.replyPrefix}${reply}`);
+            this.lastError = '';
+        } catch (error) {
+            if (!this.lastError || this.lastError === 'Upstream returned no assistant text.') {
+                this.lastError = error.message;
+            }
+            await this.sendTelegramMessage(config.botToken, chatId, `Bridge error: ${error.message}`);
+        }
+    }
+
+    async handleCommand(config, state, chatId, rawText) {
+        const command = rawText.split(/\s+/u)[0].split('@')[0].toLowerCase();
+
+        if (command === '/start' || command === '/help') {
+            await this.sendTelegramMessage(
+                config.botToken,
+                chatId,
+                [
+                    'SillyTavern Telegram bridge is online.',
+                    `Authorized: ${this.isAuthorized(config, chatId) ? 'yes' : 'no'}`,
+                    `Chat ID: ${chatId}`,
+                    'Commands: /help, /whoami, /status, /reset',
+                ].join('\n'),
+            );
+            return;
+        }
+
+        if (command === '/whoami') {
+            await this.sendTelegramMessage(config.botToken, chatId, `Chat ID: ${chatId}`);
+            return;
+        }
+
+        if (command === '/status') {
+            let statusText;
+            try {
+                const runtime = this.resolveRuntime(config);
+                statusText = [
+                    `Running: ${this.running ? 'yes' : 'no'}`,
+                    `Authorized: ${this.isAuthorized(config, chatId) ? 'yes' : 'no'}`,
+                    `Source: ${runtime.source}`,
+                    `Model: ${runtime.model}`,
+                    `User handle: ${runtime.userHandle}`,
+                ].join('\n');
+            } catch (error) {
+                statusText = `Bridge is loaded, but runtime resolution failed: ${error.message}`;
+            }
+
+            await this.sendTelegramMessage(config.botToken, chatId, statusText);
+            return;
+        }
+
+        if (command === '/reset') {
+            delete state.conversations[chatId];
+            this.writeState(state);
+            await this.sendTelegramMessage(config.botToken, chatId, 'Conversation history cleared for this Telegram chat.');
+            return;
+        }
+
+        await this.sendTelegramMessage(config.botToken, chatId, 'Unknown command. Use /help.');
+    }
+
+    isAuthorized(config, chatId) {
+        return config.allowAllChats || config.authorizedChatIds.includes(String(chatId));
+    }
+
+    listAvailableChats(userHandle) {
+        const directories = getUserDirectories(userHandle || DEFAULT_USER.handle);
+        const files = listJsonlFilesRecursive(directories.chats);
+
+        return files.map(filePath => {
+            const relative = path.relative(directories.chats, filePath);
+            const segments = relative.split(path.sep);
+            const avatarStem = segments[0] || '';
+            const chatFile = path.basename(filePath);
+            const chatData = getChatData(filePath);
+            const firstAssistant = chatData.find(message => message && message.is_user === false && !message.chat_metadata);
+            const characterName = String(firstAssistant?.name || avatarStem || 'Character');
+            const updatedAt = fs.statSync(filePath).mtime.toISOString();
+
+            return {
+                avatarUrl: `${avatarStem}.png`,
+                chatFile,
+                characterName,
+                updatedAt,
+                filePath,
+            };
+        }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    }
+
+    resolveSelectedChat(userHandle, selectedChat, throwOnMissing = false) {
+        const avatarUrl = String(selectedChat?.avatarUrl ?? '').trim();
+        const chatFile = String(selectedChat?.chatFile ?? '').trim();
+
+        if (!avatarUrl || !chatFile) {
+            if (throwOnMissing) {
+                throw new Error('No SillyTavern chat selected.');
+            }
+            return null;
+        }
+
+        const directories = getUserDirectories(userHandle || DEFAULT_USER.handle);
+        const avatarStem = avatarUrl.replace(/\.png$/i, '');
+        const fullPath = path.join(directories.chats, avatarStem, chatFile);
+
+        if (!fs.existsSync(fullPath)) {
+            if (throwOnMissing) {
+                throw new Error(`Selected chat file not found: ${chatFile}`);
+            }
+            return null;
+        }
+
+        return {
+            avatarUrl: `${avatarStem}.png`,
+            avatarStem,
+            chatFile,
+            fullPath,
+            directories,
+        };
+    }
+
+    getLinkedChatContext(config) {
+        const selection = this.resolveSelectedChat(config.userHandle, config.selectedChat, false);
+        if (!selection) {
+            return null;
+        }
+
+        const settingsPath = path.join(selection.directories.root, SETTINGS_FILE);
+        const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+        const chatData = getChatData(selection.fullPath);
+
+        if (!Array.isArray(chatData) || chatData.length === 0) {
+            throw new Error(`Selected chat is empty: ${selection.chatFile}`);
+        }
+
+        const firstAssistant = chatData.find(message => message && message.is_user === false && !message.chat_metadata);
+        const userName = String(settings.username || 'User');
+        const characterName = String(firstAssistant?.name || selection.avatarStem || 'Character');
+
+        return {
+            ...selection,
+            settings,
+            chatData,
+            userName,
+            characterName,
+        };
+    }
+
+    resolveRuntime(config) {
+        const userHandle = config.userHandle || DEFAULT_USER.handle;
+        const directories = getUserDirectories(userHandle);
+        const settingsPath = path.join(directories.root, SETTINGS_FILE);
+
+        if (!fs.existsSync(settingsPath)) {
+            throw new Error(`settings.json not found for user "${userHandle}"`);
+        }
+
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        const oaiSettings = settings.oai_settings ?? {};
+        const override = config.providerOverride ?? {};
+        const source = String(override.source || oaiSettings.chat_completion_source || 'openrouter').trim().toLowerCase();
+        const sourceConfig = SOURCE_CONFIG[source];
+
+        if (!sourceConfig) {
+            throw new Error(`Unsupported chat completion source for Telegram bridge: ${source}`);
+        }
+
+        const model = String(
+            override.model
+            || oaiSettings[sourceConfig.modelSetting]
+            || oaiSettings.openrouter_model
+            || oaiSettings.openai_model
+            || '',
+        ).trim();
+
+        if (!model) {
+            throw new Error(`No model configured for source "${source}"`);
+        }
+
+        let baseUrl = String(override.baseUrl).trim();
+        if (!baseUrl) {
+            if (sourceConfig.baseUrlResolver) {
+                baseUrl = sourceConfig.baseUrlResolver(oaiSettings);
+            } else if (sourceConfig.baseUrlFromSettings) {
+                baseUrl = String(oaiSettings[sourceConfig.baseUrlFromSettings] ?? '').trim();
+            } else {
+                baseUrl = sourceConfig.baseUrl;
+            }
+        }
+
+        if (!baseUrl) {
+            throw new Error(`No base URL configured for source "${source}"`);
+        }
+
+        let apiKey = String(override.apiKey).trim();
+        if (!apiKey && sourceConfig.secretKey) {
+            apiKey = readSecret(directories, sourceConfig.secretKey) || '';
+        }
+
+        if (!apiKey && sourceConfig.reverseProxy && oaiSettings.reverse_proxy) {
+            baseUrl = String(oaiSettings.reverse_proxy).trim();
+            apiKey = String(oaiSettings.proxy_password ?? '').trim();
+        }
+
+        if (!apiKey && source !== 'custom') {
+            throw new Error(`No API key available for source "${source}"`);
+        }
+
+        return {
+            source,
+            model,
+            baseUrl,
+            apiKey,
+            userHandle,
+            directories,
+            oaiSettings,
+            headers: cloneJson(sourceConfig.headers ?? {}),
+        };
+    }
+
+    buildRequestBody(runtime, config, state, chatId, input) {
+        const settings = runtime.oaiSettings;
+        const messages = [];
+        const linkedChat = this.getLinkedChatContext(config);
+        let history = [];
+
+        if (linkedChat) {
+            history = linkedChat.chatData
+                .slice(1)
+                .filter(message => message && !message.chat_metadata && !message.is_system && typeof message.mes === 'string')
+                .map(message => ({
+                    role: message.is_user ? 'user' : 'assistant',
+                    content: message.extra?.display_text || message.mes || '',
+                }))
+                .filter(message => message.content)
+                .slice(-Math.max(2, config.historyLimit) * 2);
+        } else {
+            history = Array.isArray(state.conversations[chatId]) ? state.conversations[chatId] : [];
+        }
+
+        if (config.systemPrompt.trim()) {
+            messages.push({
+                role: 'system',
+                content: config.systemPrompt.trim(),
+            });
+        }
+
+        messages.push(...history);
+        messages.push({
+            role: 'user',
+            content: input,
+        });
+
+        const body = {
+            model: runtime.model,
+            messages,
+            temperature: toNumber(settings.temp_openai, 1),
+            frequency_penalty: toNumber(settings.freq_pen_openai, 0),
+            presence_penalty: toNumber(settings.pres_pen_openai, 0),
+            top_p: toNumber(settings.top_p_openai, 1),
+            max_tokens: toInteger(settings.openai_max_tokens, 600),
+            stream: false,
+        };
+
+        if (runtime.source === 'openrouter') {
+            const provider = Array.isArray(settings.openrouter_providers) ? settings.openrouter_providers : [];
+            const quantizations = Array.isArray(settings.openrouter_quantizations) ? settings.openrouter_quantizations : [];
+            body.transforms = settings.openrouter_middleout === 'on' ? ['middle-out'] : [];
+            body.reasoning = {
+                exclude: !Boolean(settings.show_thoughts),
+            };
+            if (settings.reasoning_effort && settings.reasoning_effort !== 'auto') {
+                body.reasoning.effort = settings.reasoning_effort;
+            }
+            if (settings.verbosity && settings.verbosity !== 'auto') {
+                body.verbosity = settings.verbosity;
+            }
+            if (toNumber(settings.min_p_openai, 0) > 0) {
+                body.min_p = toNumber(settings.min_p_openai, 0);
+            }
+            if (toNumber(settings.top_a_openai, 0) > 0) {
+                body.top_a = toNumber(settings.top_a_openai, 0);
+            }
+            if (toNumber(settings.repetition_penalty_openai, 1) !== 1) {
+                body.repetition_penalty = toNumber(settings.repetition_penalty_openai, 1);
+            }
+            if (provider.length > 0 || quantizations.length > 0) {
+                body.provider = compactObject({
+                    allow_fallbacks: settings.openrouter_allow_fallbacks ?? true,
+                    order: provider.length > 0 ? provider : undefined,
+                    quantizations: quantizations.length > 0 ? quantizations : undefined,
+                });
+            }
+        }
+
+        if (runtime.source === 'deepseek' && !body.top_p) {
+            body.top_p = Number.EPSILON;
+        }
+
+        if (/^(o1|o3|o4)/.test(runtime.model)) {
+            body.max_completion_tokens = body.max_tokens;
+            delete body.max_tokens;
+            delete body.temperature;
+            delete body.top_p;
+            delete body.frequency_penalty;
+            delete body.presence_penalty;
+        }
+
+        if (/gpt-5/.test(runtime.model)) {
+            body.max_completion_tokens = body.max_tokens;
+            delete body.max_tokens;
+        }
+
+        return compactObject(body);
+    }
+
+    async appendToLinkedChat(config, runtime, userInput, assistantReply) {
+        const linkedChat = this.getLinkedChatContext(config);
+        if (!linkedChat) {
+            return false;
+        }
+
+        const nowIso = new Date().toISOString();
+        const userAvatar = String(linkedChat.settings.user_avatar || 'user-default.png');
+        const chatData = linkedChat.chatData.slice();
+
+        chatData.push({
+            name: linkedChat.userName,
+            is_user: true,
+            is_system: false,
+            send_date: nowIso,
+            mes: userInput,
+            extra: {
+                isSmallSys: false,
+            },
+            force_avatar: `/thumbnail?type=persona&file=${userAvatar}`,
+        });
+
+        chatData.push({
+            name: linkedChat.characterName,
+            is_user: false,
+            is_system: false,
+            send_date: new Date().toISOString(),
+            mes: assistantReply,
+            title: '',
+            gen_started: nowIso,
+            gen_finished: new Date().toISOString(),
+            swipes: [assistantReply],
+            swipe_id: 0,
+            swipe_info: [{
+                send_date: new Date().toISOString(),
+                gen_started: nowIso,
+                gen_finished: new Date().toISOString(),
+                extra: {
+                    api: runtime.source,
+                    model: runtime.model,
+                    reasoning: '',
+                    reasoning_duration: null,
+                    reasoning_signature: null,
+                    time_to_first_token: null,
+                },
+            }],
+            extra: {
+                api: runtime.source,
+                model: runtime.model,
+                reasoning: '',
+                reasoning_duration: null,
+                reasoning_signature: null,
+                time_to_first_token: null,
+            },
+        });
+
+        await trySaveChat(
+            chatData,
+            linkedChat.fullPath,
+            false,
+            runtime.userHandle,
+            linkedChat.avatarStem,
+            linkedChat.directories.backups,
+        );
+
+        return true;
+    }
+
+    updateConversation(state, chatId, userInput, assistantReply, historyLimit) {
+        const history = Array.isArray(state.conversations[chatId]) ? state.conversations[chatId] : [];
+        history.push({ role: 'user', content: userInput });
+        history.push({ role: 'assistant', content: assistantReply });
+        state.conversations[chatId] = history.slice(-Math.max(2, historyLimit) * 2);
+    }
+
+    async generateReply(config, state, chatId, input) {
+        const runtime = this.resolveRuntime(config);
+        const endpoint = `${trimTrailingSlash(runtime.baseUrl)}/chat/completions`;
+        const body = this.buildRequestBody(runtime, config, state, chatId, input);
+        const headers = {
+            'Content-Type': 'application/json',
+            ...runtime.headers,
+        };
+
+        if (runtime.apiKey) {
+            headers.Authorization = `Bearer ${runtime.apiKey}`;
+        }
+
+        const response = await this.fetchWithTimeout(
+            endpoint,
+            {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+            },
+            config.requestTimeoutMs,
+        );
+
+        const rawText = await response.text();
+        let parsed = {};
+
+        if (rawText) {
+            try {
+                parsed = JSON.parse(rawText);
+            } catch {
+                parsed = {};
+            }
+        }
+
+        if (!response.ok) {
+            throw new Error(extractErrorMessage(response.status, rawText, parsed));
+        }
+
+        const assistantReply = extractTextFromResponse(parsed);
+        if (!assistantReply) {
+            this.lastError = `Upstream returned no assistant text. Raw response preview: ${rawText.slice(0, 1200)}`;
+            throw new Error('Upstream returned no assistant text.');
+        }
+
+        const persistedToStChat = await this.appendToLinkedChat(config, runtime, input, assistantReply);
+        if (!persistedToStChat) {
+            this.updateConversation(state, chatId, input, assistantReply, config.historyLimit);
+            this.writeState(state);
+        }
+
+        return assistantReply;
+    }
+
+    telegramUrl(botToken, method) {
+        return `${TELEGRAM_API}/bot${botToken}/${method}`;
+    }
+
+    async sendChatAction(botToken, chatId, action) {
+        await this.fetchWithTimeout(
+            this.telegramUrl(botToken, 'sendChatAction'),
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    action,
+                }),
+            },
+            15000,
+        );
+    }
+
+    async sendTelegramMessage(botToken, chatId, text) {
+        const chunks = splitTelegramMessage(text);
+        for (const chunk of chunks) {
+            const response = await this.fetchWithTimeout(
+                this.telegramUrl(botToken, 'sendMessage'),
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        text: chunk,
+                    }),
+                },
+                30000,
+            );
+
+            const payload = await response.json();
+            if (!response.ok || payload?.ok !== true) {
+                throw new Error(`Telegram sendMessage failed: ${extractErrorMessage(response.status, JSON.stringify(payload), payload)}`);
+            }
+        }
+    }
+
+    async fetchWithTimeout(url, options, timeoutMs) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            return await fetch(url, {
+                ...options,
+                signal: controller.signal,
+            });
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+}
+
+const manager = new TelegramBridgeManager();
+
+export const info = {
+    id: PLUGIN_ID,
+    name: 'Telegram Bridge',
+    description: 'Telegram bot bridge that relays messages through SillyTavern server-side settings.',
+};
+
+export async function init(router) {
+    await manager.init(router);
+}
+
+export async function exit() {
+    await manager.stop();
+}
