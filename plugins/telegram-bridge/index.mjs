@@ -12,8 +12,8 @@ import { trimTrailingSlash } from '../../src/util.js';
 
 const PLUGIN_ID = 'telegram-bridge';
 const TELEGRAM_API = 'https://api.telegram.org';
-const STREAM_EDIT_INTERVAL_MS = 900;
-const STREAM_MIN_DELTA_CHARS = 24;
+const STREAM_EDIT_INTERVAL_MS = 350;
+const STREAM_MIN_DELTA_CHARS = 8;
 const DEFAULT_CONFIG = Object.freeze({
     enabled: false,
     botToken: '',
