@@ -1,5 +1,7 @@
 # SillyTavern Telegram Bridge
 
+[English](./README.md) | [简体中文](./README.zh-CN.md) | [日本語](./README.ja.md)
+
 Telegram Bridge for SillyTavern, packaged for distribution as:
 
 - a server plugin under `plugins/telegram-bridge`
