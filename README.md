@@ -75,6 +75,27 @@ To discover your Telegram chat ID:
 2. message your bot with `/whoami`
 3. copy the `Chat ID` shown in the bot response
 
+## Telegram Commands
+
+The bot also supports chat management commands directly inside Telegram:
+
+- `/help`
+- `/whoami`
+- `/status`
+- `/currentchat`
+- `/chats`
+- `/bind <number>`
+- `/unbind`
+- `/reset`
+
+Recommended flow:
+
+1. send `/chats`
+2. note the number of the SillyTavern chat you want
+3. send `/bind <number>`
+
+That will bind the current Telegram chat to the selected SillyTavern chat without opening the front-end settings page.
+
 ## Project Layout
 
 ```text

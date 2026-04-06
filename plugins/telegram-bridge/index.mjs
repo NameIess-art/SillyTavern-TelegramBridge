@@ -832,7 +832,9 @@ class TelegramBridgeManager {
     }
 
     async handleCommand(config, state, chatId, rawText) {
-        const command = rawText.split(/\s+/u)[0].split('@')[0].toLowerCase();
+        const parts = rawText.trim().split(/\s+/u);
+        const command = parts[0].split('@')[0].toLowerCase();
+        const args = parts.slice(1);
 
         if (command === '/start' || command === '/help') {
             await this.sendTelegramMessage(
@@ -842,7 +844,7 @@ class TelegramBridgeManager {
                     'SillyTavern Telegram bridge is online.',
                     `Authorized: ${this.isAuthorized(config, chatId) ? 'yes' : 'no'}`,
                     `Chat ID: ${chatId}`,
-                    'Commands: /help, /whoami, /status, /reset',
+                    'Commands: /help, /whoami, /status, /currentchat, /chats, /bind <number>, /unbind, /reset',
                 ].join('\n'),
             );
             return;
@@ -857,18 +859,113 @@ class TelegramBridgeManager {
             let statusText;
             try {
                 const runtime = this.resolveRuntime(config);
+                const currentChatLabel = this.getSelectedChatLabel(config, chatId);
                 statusText = [
                     `Running: ${this.running ? 'yes' : 'no'}`,
                     `Authorized: ${this.isAuthorized(config, chatId) ? 'yes' : 'no'}`,
                     `Source: ${runtime.source}`,
                     `Model: ${runtime.model}`,
                     `User handle: ${runtime.userHandle}`,
+                    `Linked chat: ${currentChatLabel}`,
                 ].join('\n');
             } catch (error) {
                 statusText = `Bridge is loaded, but runtime resolution failed: ${error.message}`;
             }
 
             await this.sendTelegramMessage(config.botToken, chatId, statusText);
+            return;
+        }
+
+        if (command === '/currentchat') {
+            const currentChatLabel = this.getSelectedChatLabel(config, chatId);
+            const mappedDirectly = Boolean(config.chatMappings?.[String(chatId)]);
+            await this.sendTelegramMessage(
+                config.botToken,
+                chatId,
+                [
+                    `Linked chat: ${currentChatLabel}`,
+                    `Mapping mode: ${mappedDirectly ? 'custom mapping' : 'default chat'}`,
+                    `Telegram Chat ID: ${chatId}`,
+                ].join('\n'),
+            );
+            return;
+        }
+
+        if (command === '/chats') {
+            const availableChats = this.listAvailableChats(config.userHandle);
+            if (availableChats.length === 0) {
+                await this.sendTelegramMessage(config.botToken, chatId, 'No SillyTavern chats are available to bind.');
+                return;
+            }
+
+            const lines = ['Available SillyTavern chats:'];
+            availableChats.forEach((chat, index) => {
+                lines.push(`${index + 1}. ${chat.characterName} | ${chat.chatFile}`);
+            });
+            lines.push('');
+            lines.push('Use /bind <number> to bind this Telegram chat to one of the entries above.');
+
+            await this.sendTelegramMessage(config.botToken, chatId, lines.join('\n'));
+            return;
+        }
+
+        if (command === '/bind') {
+            if (args.length === 0) {
+                await this.sendTelegramMessage(config.botToken, chatId, 'Usage: /bind <number>\nUse /chats first to see the available chat numbers.');
+                return;
+            }
+
+            const chatNumber = Number.parseInt(args[0], 10);
+            const availableChats = this.listAvailableChats(config.userHandle);
+            if (!Number.isFinite(chatNumber) || chatNumber < 1 || chatNumber > availableChats.length) {
+                await this.sendTelegramMessage(config.botToken, chatId, 'Invalid chat number. Use /chats first, then /bind <number>.');
+                return;
+            }
+
+            const selectedChat = normalizeSelectedChat(availableChats[chatNumber - 1]);
+            const nextConfig = normalizeConfig({
+                ...config,
+                chatMappings: {
+                    ...(config.chatMappings ?? {}),
+                    [String(chatId)]: selectedChat,
+                },
+            });
+
+            this.writeConfig(nextConfig);
+            Object.assign(config, nextConfig);
+
+            await this.sendTelegramMessage(
+                config.botToken,
+                chatId,
+                [
+                    'Telegram chat binding updated.',
+                    `Telegram Chat ID: ${chatId}`,
+                    `Linked chat: ${this.getSelectedChatLabel(config, chatId)}`,
+                ].join('\n'),
+            );
+            return;
+        }
+
+        if (command === '/unbind') {
+            const nextMappings = { ...(config.chatMappings ?? {}) };
+            delete nextMappings[String(chatId)];
+
+            const nextConfig = normalizeConfig({
+                ...config,
+                chatMappings: nextMappings,
+            });
+
+            this.writeConfig(nextConfig);
+            Object.assign(config, nextConfig);
+
+            await this.sendTelegramMessage(
+                config.botToken,
+                chatId,
+                [
+                    'Custom binding removed for this Telegram chat.',
+                    `Linked chat: ${this.getSelectedChatLabel(config, chatId)}`,
+                ].join('\n'),
+            );
             return;
         }
 
@@ -948,6 +1045,22 @@ class TelegramBridgeManager {
         }
 
         return normalizeSelectedChat(config.selectedChat);
+    }
+
+    getSelectedChatLabel(config, chatId = '') {
+        const selectedChat = this.getSelectedChatForTelegram(config, chatId);
+        if (!selectedChat.avatarUrl || !selectedChat.chatFile) {
+            return 'No SillyTavern chat selected';
+        }
+
+        const chat = this.listAvailableChats(config.userHandle)
+            .find(item => item.avatarUrl === selectedChat.avatarUrl && item.chatFile === selectedChat.chatFile);
+
+        if (chat) {
+            return `${chat.characterName} | ${chat.chatFile}`;
+        }
+
+        return `${selectedChat.avatarUrl} | ${selectedChat.chatFile}`;
     }
 
     getLinkedChatContext(config, chatId = '') {

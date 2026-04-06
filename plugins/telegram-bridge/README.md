@@ -47,3 +47,10 @@ The front-end extension is responsible for configuring:
 - the Telegram bot token
 - authorized Telegram chat IDs
 - the linked SillyTavern chat
+
+The bot itself also supports:
+
+- `/currentchat`
+- `/chats`
+- `/bind <number>`
+- `/unbind`
