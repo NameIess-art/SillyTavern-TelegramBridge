@@ -1,0 +1,35 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check front-end extension syntax
+        run: node --check .\extensions\telegram-bridge\index.js
+
+      - name: Check server plugin syntax
+        run: node --check .\plugins\telegram-bridge\index.mjs
+
+      - name: Check installer syntax
+        shell: powershell
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw '.\install.ps1'), [ref]$errors)
+          if ($errors) {
+            $errors | ForEach-Object { Write-Error $_.ToString() }
+            exit 1
+          }
+          Write-Host 'install.ps1 syntax OK'

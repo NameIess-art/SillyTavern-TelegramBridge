@@ -1,36 +1,35 @@
 # SillyTavern Telegram Bridge
 
-This package contains both parts required for the Telegram Bridge:
+Telegram Bridge for SillyTavern, packaged for distribution as:
 
-- A SillyTavern server plugin
-- A SillyTavern front-end extension
+- a server plugin under `plugins/telegram-bridge`
+- a front-end extension under `extensions/telegram-bridge`
 
-## Package Layout
+This bridge lets you:
+
+- connect a Telegram bot to SillyTavern
+- choose which SillyTavern chat is linked from the front end
+- configure `botToken` and Telegram `Chat ID` from the front end
+- keep Telegram conversations routed through a selected SillyTavern chat context
+
+## What Is Included
 
 - `plugins/telegram-bridge`
-  Server plugin. Copy this into your SillyTavern `plugins` folder.
+  The server plugin loaded by SillyTavern when `enableServerPlugins: true` is enabled.
 - `extensions/telegram-bridge`
-  Front-end extension. Copy this into `data/<your-user-handle>/extensions/telegram-bridge`.
+  The front-end extension shown in the SillyTavern Extensions panel.
 - `install.ps1`
-  Optional Windows installer script that copies both parts into an existing SillyTavern install.
+  A Windows installer script that copies both parts into an existing SillyTavern installation.
 
-## Manual Install
+## Requirements
 
-1. Copy `plugins/telegram-bridge` into your SillyTavern `plugins` folder.
-2. Copy `extensions/telegram-bridge` into your SillyTavern user extensions folder.
-   Example for the default user:
-   `data/default-user/extensions/telegram-bridge`
-3. In `config.yaml`, make sure:
-   `enableServerPlugins: true`
-4. Restart SillyTavern.
-5. Open the SillyTavern Extensions panel and enable `Telegram Bridge`.
-6. In the front-end settings drawer:
-   - enter your `botToken`
-   - enter your Telegram `Chat ID`
-   - choose which SillyTavern chat should be linked
-   - save
+- SillyTavern with server plugins enabled
+- A Telegram bot created via `@BotFather`
+- A valid upstream chat-completions provider already configured in SillyTavern
 
-## Windows Install Script
+## Quick Start
+
+### Windows
 
 Run:
 
@@ -43,9 +42,102 @@ Optional parameters:
 - `-UserHandle default-user`
 - `-Force`
 
-## Notes
+### Manual Install
 
-- The server plugin API routes are mounted under:
-  `/api/plugins/telegram-bridge`
-- The extension expects the server plugin to be installed and server plugins to be enabled.
-- If you use a non-default SillyTavern user, install the front-end extension into that user's `extensions` directory.
+1. Copy `plugins/telegram-bridge` into your SillyTavern `plugins` folder.
+2. Copy `extensions/telegram-bridge` into `data/<your-user-handle>/extensions/telegram-bridge`.
+3. Open your SillyTavern `config.yaml` and make sure this is enabled:
+
+```yaml
+enableServerPlugins: true
+```
+
+4. Restart SillyTavern.
+5. Open the Extensions panel and enable `Telegram Bridge`.
+
+## Front-End Setup
+
+After installation, open the `Telegram Bridge` settings drawer in SillyTavern and:
+
+1. enable the bridge
+2. paste your Telegram `botToken`
+3. enter one or more Telegram `Chat ID` values
+4. choose which SillyTavern chat should be linked
+5. save
+
+To discover your Telegram chat ID:
+
+1. message your bot with `/start`
+2. message your bot with `/whoami`
+3. copy the `Chat ID` shown in the bot response
+
+## Project Layout
+
+```text
+SillyTavern-TelegramBridge/
+|- plugins/
+|  \- telegram-bridge/
+|     |- index.mjs
+|     |- package.json
+|     \- README.md
+|- extensions/
+|  \- telegram-bridge/
+|     |- index.js
+|     |- manifest.json
+|     |- settings.html
+|     \- style.css
+|- install.ps1
+|- CHANGELOG.md
+|- CONTRIBUTING.md
+\- README.md
+```
+
+## API Routes
+
+The server plugin mounts routes under:
+
+`/api/plugins/telegram-bridge`
+
+Available endpoints:
+
+- `GET /status`
+- `GET /config`
+- `GET /chats`
+- `POST /config`
+- `POST /select-chat`
+- `POST /reset`
+
+## Troubleshooting
+
+### The extension does not appear in SillyTavern
+
+- make sure the front-end files were copied to `data/<user>/extensions/telegram-bridge`
+- open the Extensions manager and verify it is not disabled
+- refresh the browser after installation
+
+### The plugin API routes do not exist
+
+- make sure `plugins/telegram-bridge` is installed in the SillyTavern root
+- make sure `enableServerPlugins: true` is set in `config.yaml`
+- restart SillyTavern after installing the plugin
+
+### Telegram responds with bridge errors
+
+- verify the bot token is valid
+- verify the Telegram chat ID is authorized
+- verify SillyTavern has a working upstream model connection
+- inspect `/api/plugins/telegram-bridge/status` for `lastError`
+
+## Development Notes
+
+- The server plugin is designed for SillyTavern's server plugin loader.
+- The front-end extension is designed for SillyTavern's user or global third-party extension system.
+- This repository currently does not declare an open-source license. Add one before wider redistribution if you want others to reuse or modify it under explicit terms.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md).
